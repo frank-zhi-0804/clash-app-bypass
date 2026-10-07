@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Clash App Bypass",
+  "version": "0.1.0",
+  "identifier": "io.clashappbypass.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{ "label": "main", "title": "直连助手 · Clash App Bypass", "width": 1100, "height": 820, "minWidth": 760, "minHeight": 600 }],
+    "security": { "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; frame-src 'none'" }
+  },
+  "bundle": { "active": true, "targets": ["nsis"], "icon": ["icons/icon.ico"], "shortDescription": "Clash Verge Rev 应用直连助手", "windows": { "nsis": { "displayLanguageSelector": false, "languages": ["SimpChinese"], "installMode": "currentUser" } } }
+}
