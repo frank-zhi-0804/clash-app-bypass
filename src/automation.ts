@@ -22,7 +22,7 @@ export async function synchronize(settings: Settings, services: AutomationServic
   const incomplete = snapshot && (snapshot.mode !== 'rule' || next.selected.some(a => a.processes.some(p => !rules.has(p.toLowerCase()))));
   let message = '';
   // Do not enable proxy fallback on a fresh install before the user chooses an app.
-  if ((next.selected.length || next.applied?.hasRules) && (dirty || incomplete)) {
+  if ((next.selected.length || next.applied?.hasRules) && (dirty || (incomplete && next.applied?.hasRules !== false))) {
     const applied = await services.apply(next.selected, next.configDir, next.otherTraffic, next.proxyGroup);
     next = { ...next, applied: { fingerprint, revision: ROUTING_REVISION, pendingRestart: applied.pendingRestart ?? !integration.running, hasRules: next.selected.length > 0 || next.otherTraffic === 'proxy' } };
     message = applied.message;

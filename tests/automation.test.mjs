@@ -37,3 +37,9 @@ test("upgraded routing is applied once even when all previous paths are loaded",
   await synchronize(upgraded.settings, f.api);
   assert.deepEqual(f.calls, ["apply", "save"]);
 });
+
+test("explicit undo remains undone until selections change", async () => {
+  const f = fixtures({ running: true });
+  await synchronize({ ...base, applied: { revision: 2, fingerprint: routingFingerprint(base), hasRules: false, pendingRestart: false } }, f.api);
+  assert.deepEqual(f.calls, []);
+});
