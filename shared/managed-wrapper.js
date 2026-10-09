@@ -1,5 +1,6 @@
 (function () {
   const previousMain = main;
+  const appliedObjects = new WeakMap();
   main = function (config, ...args) {
     const result = previousMain(config, ...args);
     if (!result || typeof result !== 'object' || Array.isArray(result) || typeof result.then === 'function') {
@@ -7,7 +8,9 @@
     }
     const directRules = __VERGE_DIRECT_RULES__;
     const routing = __VERGE_DIRECT_ROUTING__;
-    const originalRules = Array.isArray(result.rules) ? result.rules : [];
+    const remembered = appliedObjects.get(result);
+    const unchanged = remembered && result.rules === remembered.applied && result.rules.length === remembered.snapshot.length && result.rules.every((rule, i) => rule === remembered.snapshot[i]);
+    const originalRules = unchanged ? remembered.original : (Array.isArray(result.rules) ? result.rules.slice() : []);
     if (routing.mode === 'proxy') {
       const group = routing.proxyGroup;
       if (typeof group !== 'string' || !group.trim() || /[,\r\n]/.test(group) || ['DIRECT', 'REJECT', 'REJECT-DROP', 'PASS', 'COMPATIBLE'].includes(group.toUpperCase())) {
@@ -18,10 +21,11 @@
       }
       result.rules = [...directRules, 'MATCH,' + group];
     } else if (routing.mode === 'subscription') {
-      result.rules = [...directRules, ...originalRules.filter(rule => !directRules.includes(rule))];
+      result.rules = [...directRules, ...originalRules];
     } else {
       throw new Error('Clash App Bypass: invalid routing mode');
     }
+    appliedObjects.set(result, { original: originalRules, applied: result.rules, snapshot: result.rules.slice() });
     result['find-process-mode'] = 'always';
     result.mode = 'rule';
     return result;

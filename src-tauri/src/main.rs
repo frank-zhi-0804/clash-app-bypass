@@ -5,11 +5,11 @@ mod live;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fs, io::Write, path::{Path, PathBuf}, process::{Command, Stdio}, sync::Mutex, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
+use std::{collections::BTreeMap, fs, io::Write, path::{Path, PathBuf}, process::{Command, Stdio}, sync::{Arc, Mutex}, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
 use tauri::Manager;
 
 type Result<T> = std::result::Result<T, String>;
-struct OperationLock(Mutex<()>);
+struct OperationLock(Arc<Mutex<()>>);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,9 +41,18 @@ fn pipe_controller(config: &serde_yaml::Value) -> Result<String> {
     }
     Ok(pipe.into())
 }
-fn live_api(packet: &serde_json::Value) -> Result<()> {
+fn live_api(packet: &serde_json::Value) -> Result<serde_json::Value> {
     powershell_input(include_str!("../scripts/live-api.ps1"), None, Some(&packet.to_string()))
-        .map(|_| ()).map_err(|_| "在线配置检查或加载失败，请刷新 Clash 配置后重试".into())
+        .and_then(|output| match output.trim() {
+            "LIVE_CONFLICT" => Err("运行规则或网络设置已变化，已停止覆盖；请刷新 Clash 配置后重试".into()),
+            "LIVE_UNSUPPORTED" => Err("当前规则结构不支持在线核对，请完全退出 Clash 后应用".into()),
+            "LIVE_INVALID" => Err("在线操作参数无效，已停止修改".into()),
+            "LIVE_TRANSPORT" => Err("无法连接或加载 Clash 在线接口，请检查 Clash 后重试".into()),
+            _ => {
+                let value: serde_json::Value = serde_json::from_str(&output).map_err(|_| "在线操作未返回验证结果，已停止修改")?;
+                if value.get("verified").and_then(|v| v.as_bool()) == Some(true) { Ok(value) } else { Err("在线操作未返回验证结果，已停止修改".into()) }
+            },
+        }).map_err(|e: String| if e.starts_with("Windows 扫描失败") { "无法连接 Clash 在线接口，请检查 Clash 后重试".into() } else { e })
 }
 #[derive(Default, Serialize, Deserialize)]
 struct Manifest { #[serde(default)] issued_blocks: BTreeMap<String, Vec<String>> }
@@ -82,7 +91,11 @@ fn powershell_input(script: &str, inspect: Option<&str>, input: Option<&str>) ->
         command.args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &STANDARD.encode(bytes)])
             .creation_flags(0x08000000).stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
         command.env_remove("VERGE_DIRECT_INSPECT");
-        if let Some(path) = inspect { command.env("VERGE_DIRECT_INSPECT", path); }
+        command.env_remove("VERGE_DIRECT_INSPECT_BATCH");
+        if let Some(path) = inspect {
+            if path.starts_with('[') { command.env("VERGE_DIRECT_INSPECT_BATCH", path); }
+            else { command.env("VERGE_DIRECT_INSPECT", path); }
+        }
         let mut child = command.spawn().map_err(|e| format!("无法启动 Windows 扫描：{e}"))?;
         if let Some(input) = input {
             child.stdin.take().ok_or("无法传入本机配置")?.write_all(input.as_bytes()).map_err(|_| "无法传入本机配置")?;
@@ -130,6 +143,14 @@ fn reconcile_entry(previous: &AppEntry, mut live: AppEntry) -> AppEntry {
 }
 
 fn refresh_entries(apps: Vec<AppEntry>) -> Result<Vec<AppEntry>> {
+    let paths: Vec<&str> = apps.iter().filter(|entry| Path::new(&entry.path).is_file()).map(|entry| entry.path.as_str()).collect();
+    let mut refreshed = BTreeMap::new();
+    for batch in paths.chunks(64) {
+        let inspect = serde_json::to_string(batch).map_err(|e| e.to_string())?;
+        let output = powershell(include_str!("../scripts/scan.ps1"), Some(&inspect))?;
+        let live: Vec<AppEntry> = serde_json::from_str(&output).map_err(|e| format!("无法解析刷新结果：{e}"))?;
+        refreshed.extend(live.into_iter().map(|entry| (entry.path.to_lowercase(), entry)));
+    }
     apps.into_iter().map(|previous| {
         if !Path::new(&previous.path).is_file() {
             let mut missing = previous;
@@ -138,7 +159,7 @@ fn refresh_entries(apps: Vec<AppEntry>) -> Result<Vec<AppEntry>> {
             missing.warnings = vec!["主程序路径已失效。请取消选择，再添加新的程序文件".into()];
             return Ok(missing);
         }
-        let live = scan(Some(&previous.path))?.into_iter().next().ok_or("无法识别所选程序，请重新添加")?;
+        let live = refreshed.get(&previous.path.to_lowercase()).cloned().ok_or("无法识别所选程序，请重新添加")?;
         Ok(reconcile_entry(&previous, live))
     }).collect()
 }
@@ -246,8 +267,14 @@ fn modify_rules(app: &tauri::AppHandle, apps: &[AppEntry], input: &str, remove: 
         let (new_runtime, previous_rules, next_rules) = live::plan(&old_runtime, current.as_deref(), block.as_deref())?;
         let general: serde_yaml::Value = serde_yaml::from_str(&old_runtime).map_err(|_| "运行配置格式异常")?;
         let controller = pipe_controller(&general)?;
-        let packet = serde_json::json!({"action":"preflight", "controller":controller, "general":general, "previousRules":previous_rules, "nextRules":next_rules, "payload":new_runtime});
-        live_api(&packet)?;
+        let mut packet = serde_json::json!({"action":"preflight", "controller":controller, "general":general, "previousRules":previous_rules, "nextRules":next_rules, "payload":new_runtime});
+        let preflight = live_api(&packet)?;
+        let previous = preflight.get("previousRouting").ok_or("在线预检未返回原路由状态")?;
+        let mut restore_general = general.clone();
+        restore_general["mode"] = serde_yaml::Value::String(previous.get("mode").and_then(|v| v.as_str()).ok_or("原路由模式无法核对")?.into());
+        restore_general["find-process-mode"] = serde_yaml::Value::String(previous.get("findProcessMode").and_then(|v| v.as_str()).ok_or("原进程识别状态无法核对")?.into());
+        packet["restorePayload"] = serde_json::json!(serde_yaml::to_string(&restore_general).map_err(|_| "无法准备恢复配置")?);
+        packet["restoreGeneral"] = serde_json::to_value(&restore_general).map_err(|_| "无法准备恢复配置")?;
         Some((old_runtime, new_runtime, packet))
     } else { None };
     let backups = data.join("backups"); fs::create_dir_all(&backups).map_err(|e| e.to_string())?;
@@ -279,7 +306,7 @@ fn modify_rules(app: &tauri::AppHandle, apps: &[AppEntry], input: &str, remove: 
             if (script_now != source && script_now != new_source) || (runtime_now != old_runtime && runtime_now != new_runtime) { return Err(format!("{error}；发现外部修改，未覆盖配置，请先退出 Clash 检查恢复记录")); }
             atomic_write(&path, source.as_bytes())?;
             atomic_write(&runtime_path, old_runtime.as_bytes())?;
-            let restore = serde_json::json!({"action":"restore", "controller":packet["controller"], "payload":old_runtime, "previousRules":packet["nextRules"], "nextRules":packet["previousRules"]});
+            let restore = serde_json::json!({"action":"restore", "controller":packet["controller"], "payload":packet["restorePayload"], "previousRules":packet["nextRules"], "nextRules":packet["previousRules"], "general":packet["restoreGeneral"], "previousGeneral":serde_yaml::from_str::<serde_yaml::Value>(&journal.new_runtime).map_err(|_| "恢复配置格式异常")?});
             if live_api(&restore).is_err() { return Err(format!("{error}；文件已恢复，内核状态无法确认，请退出 Clash 后重试")); }
             fs::remove_file(&journal_path).map_err(|e| e.to_string())?;
             return Err(format!("{error}；已恢复原配置和规则"));
@@ -315,19 +342,25 @@ async fn inspect_integration(config_dir: String) -> Result<Integration> {
 #[tauri::command]
 async fn apply_rules(app: tauri::AppHandle, state: tauri::State<'_, OperationLock>, apps: Vec<AppEntry>, config_dir: String, other_traffic: String, proxy_group: String) -> Result<OperationResult> {
     // A non-blocking guard avoids overlapping requests within one process.
-    let guard = state.0.try_lock().map_err(|_| "操作正在进行，请稍后重试")?;
-    let result = modify_rules(&app, &apps, &config_dir, false, &other_traffic, &proxy_group); drop(guard); result
+    let lock = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = lock.try_lock().map_err(|_| "操作正在进行，请稍后重试")?;
+        modify_rules(&app, &apps, &config_dir, false, &other_traffic, &proxy_group)
+    }).await.map_err(|e| e.to_string())?
 }
 #[tauri::command]
 async fn remove_rules(app: tauri::AppHandle, state: tauri::State<'_, OperationLock>, config_dir: String) -> Result<OperationResult> {
-    let guard = state.0.try_lock().map_err(|_| "操作正在进行，请稍后重试")?;
-    let result = modify_rules(&app, &[], &config_dir, true, "subscription", ""); drop(guard); result
+    let lock = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = lock.try_lock().map_err(|_| "操作正在进行，请稍后重试")?;
+        modify_rules(&app, &[], &config_dir, true, "subscription", "")
+    }).await.map_err(|e| e.to_string())?
 }
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| { if let Some(w) = app.get_webview_window("main") { let _ = w.set_focus(); } }))
         .plugin(tauri_plugin_dialog::init())
-        .manage(OperationLock(Mutex::new(())))
+        .manage(OperationLock(Arc::new(Mutex::new(()))))
         .invoke_handler(tauri::generate_handler![load_settings, save_settings, scan_apps, inspect_app, refresh_selected, inspect_integration, apply_rules, remove_rules, diagnose_routing])
         .run(tauri::generate_context!()).expect("无法启动直连助手");
 }

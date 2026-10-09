@@ -4,7 +4,7 @@
 
 [中文](README.md) | **English**
 
-A Windows application bypass assistant for Clash Verge Rev. Select applications that should connect directly, inspect related processes, and generate rules matching their full executable paths. This is an independent third-party project, unaffiliated with Clash Verge Rev. Current source version: **0.1.5**. The application interface is currently in Chinese.
+A Windows application bypass assistant for Clash Verge Rev. Select applications that should connect directly, inspect related processes, and generate rules matching their full executable paths. This is an independent third-party project, unaffiliated with Clash Verge Rev. Current source version: **0.1.6**. The application interface is currently in Chinese.
 
 ## Features
 
@@ -42,7 +42,7 @@ The author has confirmed that the published v0.1.1 works on their own Windows co
 
 The default rule order is “selected executable paths → DIRECT; remaining traffic → MATCH,selected proxy group”. This overrides subscription routing rules in the runtime configuration while preserving the subscription source and original script. “Follow subscription rules” (`遵循订阅规则`) retains subscription routing and does not guarantee that a particular website uses a proxy.
 
-Deselecting an application automatically synchronizes and removes its direct rules. With no applications selected, “Use proxy” still retains the default proxy rule. “Undo this tool's rules” (`撤销本工具规则`) removes the managed section while keeping application selections.
+Deselecting an application automatically synchronizes and removes its direct rules. With no applications selected, “Use proxy” still retains the default proxy rule. “Undo this tool's rules” (`撤销本工具规则`) removes the managed section, keeps application selections, and pauses automatic application. Click “Apply now” (`立即应用`) or change a routing selection to resume; helpers discovered by background scanning will not resume it automatically.
 
 ## Scope and limitations
 
@@ -110,3 +110,12 @@ Enabling app bypass automatically saves and attempts to apply rules online, with
 Online updates use the existing local named-pipe interface without enabling interfaces or changing permissions. The assistant checks existing rules and network settings, backs up and updates the global script and runtime configuration, reloads, and verifies. Failures attempt restoration; external changes preserve the conflict and stop automatic retries. If Clash is stopped, rules are saved for its next startup. Returning from older proxy-fallback rules to subscription routing, or fully removing them without the original subscription rules, requires a one-time offline operation.
 
 Diagnostics are a current snapshot, do not terminate existing connections, and cannot guarantee discovery of all unknown or protected processes. Healthy operation does not repeatedly show popups; immediate checks and manual retries remain available.
+
+## Further testing and fixes (0.1.6)
+
+- Selected applications are scanned in batches, sharing process, signature, and directory caches within each scan. Caches do not survive between cycles.
+- Automatic synchronization and manual operations are serialized to prevent older state from replacing new selections. Undo remains paused through refreshes and upgrades.
+- Pending status is checked against loaded rules. A connection check failure after a successful write is reported separately; disabled rules and disabled process lookup are not treated as active routing.
+- Live recovery verifies the original routing mode, process lookup, and observable network settings. Subscription rules identical to managed rules are preserved; undo removes only the added portion.
+
+Tests cover synchronization, undo, status checks, association trust boundaries, and named-pipe conflicts and recovery. An isolated local core verifies live application, removal, persistence after restart, and restoring mode when the rules are unchanged. The current API cannot verify every possible external configuration change; special or protected processes may still need manual addition.

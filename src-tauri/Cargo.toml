@@ -1,6 +1,6 @@
 [package]
 name = "clash-app-bypass"
-version = "0.1.5"
+version = "0.1.6"
 description = "Windows application direct routing assistant for Clash Verge Rev"
 edition = "2021"
 

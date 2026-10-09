@@ -4,6 +4,22 @@ import http from 'node:http';
 import fs from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+const liveApiSource = fs.readFileSync(new URL('../src-tauri/scripts/live-api.ps1', import.meta.url), 'utf8');
+const runLiveApi = packet => new Promise((resolve, reject) => {
+  const child = execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(liveApiSource, 'utf16le').toString('base64')], { timeout: 15000, windowsHide: true }, (error, stdout, stderr) => {
+    if (error || /^LIVE_[A-Z_]+$/.test(stdout.trim())) reject(Object.assign(new Error(`Live API refused request: ${stdout.trim() || stderr.trim()}`), { stdout, stderr }));
+    else resolve(stdout);
+  });
+  child.stdin.end(JSON.stringify(packet));
+});
+const listen = server => new Promise((resolve, reject) => { server.once('error', reject); server.listen(server.testPipe, resolve); });
+function liveServer(handler) {
+  const server = http.createServer(handler);
+  server.testPipe = `\\\\.\\pipe\\clash-bypass-live-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return server;
+}
+const close = server => new Promise(resolve => server.close(resolve));
+const json = (res, body) => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(body)); };
 test('local pipe diagnostics read real HTTP JSON, preserve Unicode paths and exclude private metadata', { skip: process.platform !== 'win32' }, async () => {
   const pipe = `\\\\.\\pipe\\clash-bypass-test-${process.pid}-${Date.now()}`;
   const requests = [];
@@ -12,7 +28,7 @@ test('local pipe diagnostics read real HTTP JSON, preserve Unicode paths and exc
     requests.push([req.method, req.url]);
     const data = {
       '/configs': { mode: 'rule', 'find-process-mode': 'always', secret: 'must-not-be-returned' },
-      '/rules': { rules: [{ type: 'ProcessPath', proxy: 'DIRECT', payload: path }, { type: 'Match', proxy: 'GLOBAL', payload: '' }] },
+      '/rules': { rules: [{ type: 'ProcessPath', proxy: 'DIRECT', payload: path }, { type: 'ProcessPath', proxy: 'DIRECT', payload: 'D:\\disabled.exe', extra: { disabled: true } }, { type: 'Match', proxy: 'GLOBAL', payload: '' }] },
       '/connections': { connections: [{ metadata: { processPath: path, host: 'private.example' }, chains: ['DIRECT'], rule: 'ProcessPath', start: '' }, { metadata: {}, chains: ['GLOBAL'] }] }
     };
     res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(data[req.url]));
@@ -42,17 +58,101 @@ test('online apply verifies existing rules before mutating and transfers Unicode
         rules = [{ type: 'ProcessPath', payload: 'D:\\游戏\\game.exe', proxy: 'DIRECT' }, { type: 'Match', payload: '', proxy: 'GLOBAL' }];
         res.writeHead(204); res.end();
       });
-    } else { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(req.url === '/rules' ? { rules } : { mode: 'rule', 'mixed-port': 7897 })); }
+    } else { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(req.url === '/rules' ? { rules } : { mode: 'rule', 'find-process-mode': 'always', 'mixed-port': 7897 })); }
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(pipe, resolve); });
-  const source = fs.readFileSync(new URL('../src-tauri/scripts/live-api.ps1', import.meta.url), 'utf8');
-  const run = packet => new Promise((resolve, reject) => {
-    const child = execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(source, 'utf16le').toString('base64')], { timeout: 15000, windowsHide: true }, (error, stdout) => error ? reject(new Error('Live API refused request')) : resolve(stdout));
-    child.stdin.end(JSON.stringify(packet));
-  });
   const packet = { action: 'apply', controller: pipe, payload, general: { 'mixed-port': 7897 }, previousRules: ['MATCH,GLOBAL'], nextRules: ['PROCESS-PATH,D:\\游戏\\game.exe,DIRECT', 'MATCH,GLOBAL'] };
   try {
-    assert.equal(JSON.parse((await run(packet)).trim()).verified, true); assert.equal(writes, 1);
-    await assert.rejects(run(packet), /refused/); assert.equal(writes, 1);
+    assert.equal(JSON.parse((await runLiveApi(packet)).trim()).verified, true); assert.equal(writes, 1);
+    await assert.rejects(runLiveApi(packet), /LIVE_CONFLICT/); assert.equal(writes, 1);
   } finally { await new Promise(resolve => server.close(resolve)); }
+});
+test('online preflight refuses disabled rules and changed network settings without any PUT', { skip: process.platform !== 'win32' }, async () => {
+  let disabled = true, writes = 0;
+  const server = liveServer((req, res) => {
+    if (req.method === 'PUT') writes++;
+    json(res, req.url === '/rules' ? { rules: [{ type: 'Match', payload: '', proxy: 'GLOBAL', extra: { disabled } }] } : { 'mixed-port': 7898 });
+  });
+  await listen(server);
+  const packet = { action: 'preflight', controller: server.testPipe, general: { 'mixed-port': 7897 }, previousRules: ['MATCH,GLOBAL'] };
+  try {
+    await assert.rejects(runLiveApi(packet), /LIVE_CONFLICT/);
+    disabled = false;
+    await assert.rejects(runLiveApi(packet), /LIVE_CONFLICT/);
+    assert.equal(writes, 0);
+  } finally { await close(server); }
+});
+test('preflight captures actual routing settings without exposing configuration secrets', { skip: process.platform !== 'win32' }, async () => {
+  const requests = [];
+  const server = liveServer((req, res) => {
+    requests.push(req.method);
+    json(res, req.url === '/rules' ? { rules: [{ type: 'Match', payload: '', proxy: 'GLOBAL' }] } : { mode: 'global', 'find-process-mode': 'strict', 'mixed-port': 7897, secret: 'secret-core-token' });
+  });
+  await listen(server);
+  try {
+    const reply = await runLiveApi({ action: 'preflight', controller: server.testPipe, general: { mode: 'rule', 'find-process-mode': 'always', 'mixed-port': 7897 }, previousRules: ['MATCH,GLOBAL'] });
+    assert.deepEqual(JSON.parse(reply.trim()), { verified: true, previousRouting: { mode: 'global', findProcessMode: 'strict' } });
+    assert.ok(!reply.includes('secret-core-token'));
+    assert.deepEqual(requests, ['GET', 'GET']);
+  } finally { await close(server); }
+});
+test('rollback restores routing settings when old and new rules are identical, then avoids duplicate reload', { skip: process.platform !== 'win32' }, async () => {
+  const original = { mode: 'global', 'find-process-mode': 'strict', 'mixed-port': 7897, tun: { enable: false } };
+  const applied = { ...original, mode: 'rule', 'find-process-mode': 'always' };
+  let active = applied, writes = 0;
+  const server = liveServer((req, res) => {
+    if (req.method === 'PUT') {
+      let body = ''; req.on('data', d => body += d); req.on('end', () => {
+        assert.deepEqual(JSON.parse(JSON.parse(body).payload), original);
+        active = original; writes++; res.writeHead(204); res.end();
+      });
+    } else json(res, req.url === '/rules' ? { rules: [{ type: 'Match', payload: '', proxy: 'GLOBAL' }] } : active);
+  });
+  await listen(server);
+  const packet = { action: 'restore', controller: server.testPipe, general: original, previousGeneral: applied, payload: JSON.stringify(original), previousRules: ['MATCH,GLOBAL'], nextRules: ['MATCH,GLOBAL'] };
+  try {
+    assert.equal(JSON.parse((await runLiveApi(packet)).trim()).verified, true);
+    assert.deepEqual(active, original); assert.equal(writes, 1);
+    assert.equal(JSON.parse((await runLiveApi(packet)).trim()).verified, true);
+    assert.equal(writes, 1);
+  } finally { await close(server); }
+});
+test('rollback refuses a third configuration rather than overwriting external changes', { skip: process.platform !== 'win32' }, async () => {
+  let writes = 0;
+  const server = liveServer((req, res) => {
+    if (req.method === 'PUT') writes++;
+    json(res, req.url === '/rules' ? { rules: [{ type: 'Match', payload: '', proxy: 'GLOBAL' }] } : { mode: 'direct', 'find-process-mode': 'never', 'mixed-port': 7897 });
+  });
+  await listen(server);
+  const packet = { action: 'restore', controller: server.testPipe, general: { mode: 'global', 'find-process-mode': 'strict' }, previousGeneral: { mode: 'rule', 'find-process-mode': 'always' }, payload: 'private-payload', previousRules: ['MATCH,GLOBAL'], nextRules: ['MATCH,GLOBAL'] };
+  try {
+    await assert.rejects(runLiveApi(packet), /LIVE_CONFLICT/);
+    assert.equal(writes, 0);
+  } finally { await close(server); }
+});
+test('failed reload reports a small error code and does not expose an API response or payload', { skip: process.platform !== 'win32' }, async () => {
+  const server = liveServer((req, res) => {
+    if (req.method === 'PUT') { res.writeHead(400); res.end('secret-subscription-response'); }
+    else json(res, req.url === '/rules' ? { rules: [{ type: 'Match', payload: '', proxy: 'GLOBAL' }] } : { 'mixed-port': 7897 });
+  });
+  await listen(server);
+  try {
+    await assert.rejects(runLiveApi({ action: 'apply', controller: server.testPipe, general: { 'mixed-port': 7897 }, payload: 'secret-full-configuration', previousRules: ['MATCH,GLOBAL'], nextRules: ['MATCH,GLOBAL'] }), error => {
+      assert.equal(error.stdout.trim(), 'LIVE_TRANSPORT'); assert.equal(error.stderr.trim(), '');
+      assert.ok(!error.message.includes('secret-'));
+      return true;
+    });
+  } finally { await close(server); }
+});
+test('successful reload must also enable process lookup, not just rule mode', { skip: process.platform !== 'win32' }, async () => {
+  let writes = 0;
+  const server = liveServer((req, res) => {
+    if (req.method === 'PUT') { req.resume(); req.on('end', () => { writes++; res.writeHead(204); res.end(); }); }
+    else json(res, req.url === '/rules' ? { rules: [{ type: 'Match', payload: '', proxy: 'GLOBAL' }] } : { mode: 'rule', 'find-process-mode': 'strict' });
+  });
+  await listen(server);
+  try {
+    await assert.rejects(runLiveApi({ action: 'apply', controller: server.testPipe, general: {}, payload: '{}', previousRules: ['MATCH,GLOBAL'], nextRules: ['MATCH,GLOBAL'] }), /LIVE_CONFLICT/);
+    assert.equal(writes, 1);
+  } finally { await close(server); }
 });

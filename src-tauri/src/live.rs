@@ -33,7 +33,9 @@ pub fn plan(original: &str, previous: Option<&str>, next: Option<&str>) -> Resul
     let rules = if let Some(block) = next {
         let (mut direct, routing) = block_rules(block)?;
         if routing.mode == "proxy" { direct.push(format!("MATCH,{}", routing.proxy_group)); }
-        else { base.retain(|r| !direct.contains(r)); direct.extend(base); }
+        // Keep subscription rules even when they equal a managed rule. The owned
+        // prefix can then be removed without deleting an original subscription rule.
+        else { direct.extend(base); }
         direct
     } else { base };
     config["rules"] = serde_yaml::to_value(&rules).map_err(|e| e.to_string())?;
@@ -64,5 +66,14 @@ mod tests {
         let (payload, _, _) = plan("rules: ['DOMAIN,example.com,DIRECT', 'MATCH,Proxy']", Some(&old), Some(&next)).unwrap();
         let (_, _, removed) = plan(&payload, Some(&next), None).unwrap();
         assert_eq!(removed, vec!["DOMAIN,example.com,DIRECT", "MATCH,Proxy"]);
+    }
+    #[test] fn subscription_rule_identical_to_managed_rule_survives_removal() {
+        let next = make_block(&[r"C:\Apps\app.exe".into()], "subscription", "").unwrap();
+        let original = r#"rules: ['PROCESS-PATH,C:\Apps\app.exe,DIRECT', 'MATCH,Proxy']"#;
+        let (payload, before, inserted) = plan(original, None, Some(&next)).unwrap();
+        assert_eq!(inserted.len(), before.len() + 1);
+        assert_eq!(inserted[0], inserted[1]);
+        let (_, _, removed) = plan(&payload, Some(&next), None).unwrap();
+        assert_eq!(removed, before);
     }
 }

@@ -21,7 +21,7 @@ test('direct rules precede MATCH and preserve custom main and other fields', () 
 });
 test('applying configuration multiple times does not duplicate tool rules', () => {
   const r = run('function main(c) { return c; }', { rules: [rules[0], 'DOMAIN,example.org,DIRECT', 'MATCH,Proxy'] }, 3);
-  assert.deepEqual(Array.from(r.rules), [...rules, 'DOMAIN,example.org,DIRECT', 'MATCH,Proxy']);
+  assert.deepEqual(Array.from(r.rules), [...rules, rules[0], 'DOMAIN,example.org,DIRECT', 'MATCH,Proxy']);
 });
 test('supports original main returning a new object', () => {
   const r = run('function main(c) { return { ...c, rules: ["MATCH,Proxy"] }; }', { port: 7897 });
@@ -61,3 +61,9 @@ test('invalid or missing proxy group is rejected', () => {
   for (const group of ['DIRECT', 'REJECT', '', 'bad,group', 'Missing']) assert.throws(() => routed({}, 'proxy', group));
 });
 test('invalid routing mode is rejected', () => { assert.throws(() => routed({}, 'unknown')); });
+
+test('subscription-owned identical rules survive tool application', () => {
+  const input = [rules[0], 'MATCH,Proxy'];
+  const result = routed({ rules: input }, 'subscription');
+  assert.deepEqual(Array.from(result.rules), [...rules, ...input]);
+});

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applicationStatus, readWorkspace, routingFingerprint } from '../src/workflow.ts';
+import { applicationStatus, readWorkspace, resumeAfterRoutingChange, routingFingerprint } from '../src/workflow.ts';
 
 const app = { id: 'steam', name: 'Steam', path: 'C:\\Steam\\steam.exe', processes: ['C:\\Steam\\steam.exe', 'C:\\Steam\\helper.exe'], running: false, source: 'test', warnings: [] };
 const settings = { selected: [app], configDir: 'C:\\Clash', dark: false, otherTraffic: 'proxy', proxyGroup: 'GLOBAL' };
@@ -48,6 +48,18 @@ test('status distinguishes saved choices, pending restart, written rules, edits,
   assert.equal(applicationStatus({ ...restarted, dark: true }, integration).label, '规则已写入');
   const removed = { ...written, applied: { ...written.applied, hasRules: false } };
   assert.match(applicationStatus(removed, { ...integration, managed: false }).message, /规则已撤销/);
-  assert.equal(applicationStatus({ ...removed, applied: { ...removed.applied, pendingRestart: false } }, { ...integration, managed: false }).label, '未应用');
+  assert.equal(applicationStatus({ ...removed, applied: { ...removed.applied, pendingRestart: false } }, { ...integration, managed: false }).label, '自动应用已暂停');
   assert.equal(applicationStatus(written, integration, false).label, '浏览器演示');
+});
+
+test('only a user routing change resumes automatic application after undo', () => {
+  const undone = { ...settings, applied: { fingerprint: routingFingerprint(settings), hasRules: false, pendingRestart: false } };
+  const themeChange = { ...undone, dark: true };
+  assert.equal(resumeAfterRoutingChange(undone, themeChange), themeChange);
+  const labelChange = { ...undone, selected: [{ ...app, name: 'Display name' }] };
+  assert.equal(resumeAfterRoutingChange(undone, labelChange), labelChange);
+  const selectionChange = { ...undone, selected: [] };
+  assert.equal(resumeAfterRoutingChange(undone, selectionChange).applied, null);
+  const fallbackChange = { ...undone, otherTraffic: 'subscription' };
+  assert.equal(resumeAfterRoutingChange(undone, fallbackChange).applied, null);
 });
