@@ -1,5 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { AppEntry, Integration, Settings, OperationResult } from './types';
+import type { RoutingSnapshot } from './routingDiagnostics';
 export const desktop = isTauri();
 const defaults: Settings = { selected: [], configDir: '', dark: false, otherTraffic: 'proxy', proxyGroup: 'GLOBAL' };
 const examples: AppEntry[] = [
@@ -19,6 +20,10 @@ export async function scanApps(): Promise<AppEntry[]> { return desktop ? invoke(
 export async function inspectApp(path: string): Promise<AppEntry> { return invoke('inspect_app', { path }); }
 export async function refreshSelected(apps: AppEntry[]): Promise<AppEntry[]> {
   return desktop ? invoke('refresh_selected', { apps }) : apps;
+}
+export async function diagnoseRouting(configDir: string): Promise<RoutingSnapshot> {
+  if (!desktop) throw new Error('实际连接检查仅在桌面版中可用');
+  return invoke('diagnose_routing', { configDir });
 }
 export async function integration(configDir: string): Promise<Integration> {
   return desktop ? invoke('inspect_integration', { configDir }) : { configDir: '', found: false, running: false, managed: false, message: '浏览器演示，未连接 Clash', proxyGroups: ['GLOBAL', '示例代理组'] };

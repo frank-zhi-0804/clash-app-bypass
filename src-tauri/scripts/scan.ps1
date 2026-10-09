@@ -1,7 +1,10 @@
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $entries = @{}
-$processes = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.EndsWith('.exe', [StringComparison]::OrdinalIgnoreCase) })
+$inventory = @(Get-CimInstance Win32_Process)
+$processes = @($inventory | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.EndsWith('.exe', [StringComparison]::OrdinalIgnoreCase) })
+$processById = @{}
+foreach ($proc in $inventory) { if ($proc.ProcessId) { $processById[[string]$proc.ProcessId] = $proc } }
 $windowsRoot = [IO.Path]::GetFullPath($env:WINDIR).TrimEnd('\') + '\'
 function Get-ValorantPaths([string]$path) {
   $root = [IO.Path]::GetDirectoryName($path)
@@ -34,7 +37,7 @@ function Add-App([string]$path, [string]$name, [string]$source) {
   if ($entries.ContainsKey($id)) { return }
   if (-not $name) { try { $name = [Diagnostics.FileVersionInfo]::GetVersionInfo($full).ProductName } catch {} }
   if (-not $name) { $name = [IO.Path]::GetFileNameWithoutExtension($full) }
-  $entries[$id] = [ordered]@{ id = $id; name = $name; path = $full; running = $false; processes = @($full); source = $source; warnings = @() }
+  $entries[$id] = [ordered]@{ id = $id; name = $name; path = $full; running = $false; processes = @($full); suggestedProcesses = @(); source = $source; warnings = @() }
 }
 if ($env:VERGE_DIRECT_INSPECT) {
   Add-App $env:VERGE_DIRECT_INSPECT '' '手动添加'
@@ -98,6 +101,28 @@ foreach ($entry in $entries.Values) {
     $entry.processes = @(@($entry.processes + $valorantPaths) | Select-Object -Unique)
     $entry.warnings += '已按无畏契约安装结构关联游戏主程序和登录辅助程序。'
   }
-  $entry.warnings += '只关联同产品信息或已知辅助进程，目录外的共享服务需要单独添加。'
+  # A launcher may start another product outside its directory. Offer those paths
+  # for review instead of silently bypassing every app launched by Steam/browsers.
+  $relatedIds = @{}
+  foreach ($proc in $processes) { if ($entry.processes -icontains $proc.ExecutablePath -and $proc.ProcessId) { $relatedIds[[string]$proc.ProcessId] = $true } }
+  for ($depth = 0; $depth -lt 16; $depth++) {
+    $added = $false
+    foreach ($proc in $inventory) {
+      $key = [string]$proc.ProcessId; $parentKey = [string]$proc.ParentProcessId
+      if (-not $proc.ProcessId -or $relatedIds.ContainsKey($key) -or -not $relatedIds.ContainsKey($parentKey)) { continue }
+      $parent = $processById[$parentKey]
+      # PID reuse must not attach a child to a newer, unrelated parent.
+      if (-not $proc.CreationDate -or -not $parent.CreationDate -or $proc.CreationDate -lt $parent.CreationDate) { continue }
+      $relatedIds[$key] = $true; $added = $true
+      $candidate = $proc.ExecutablePath
+      if ($candidate -and $candidate.EndsWith('.exe', [StringComparison]::OrdinalIgnoreCase) -and -not $candidate.StartsWith($windowsRoot, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $candidate -PathType Leaf) -and $entry.processes -inotcontains $candidate) { $entry.suggestedProcesses += $candidate }
+    }
+    if (-not $added) { break }
+  }
+  $entry.suggestedProcesses = @($entry.suggestedProcesses | Select-Object -Unique)
+  $entry.running = @($processes | Where-Object { $entry.processes -icontains $_.ExecutablePath }).Count -gt 0
+  if ($entry.suggestedProcesses.Count -gt 0) { $entry.warnings += '发现启动链中的其他程序，请检查候选关联程序；确认后保存并重新应用规则。' }
+  if (@($inventory | Where-Object { $relatedIds.ContainsKey([string]$_.ProcessId) -and -not $_.ExecutablePath }).Count -gt 0) { $entry.warnings += '部分关联进程路径无法读取，关联清单可能不完整。' }
+  $entry.warnings += '自动关联同产品信息或已知辅助进程；启动链候选需要确认，未识别的共享服务可单独添加。'
 }
 ConvertTo-Json -InputObject @($entries.Values | Sort-Object name) -Depth 5 -Compress

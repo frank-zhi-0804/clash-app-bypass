@@ -12,7 +12,7 @@ struct OperationLock(Mutex<()>);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AppEntry { id: String, name: String, path: String, running: bool, processes: Vec<String>, source: String, warnings: Vec<String>, #[serde(default)] path_missing: bool }
+struct AppEntry { id: String, name: String, path: String, running: bool, processes: Vec<String>, #[serde(default)] suggested_processes: Vec<String>, source: String, warnings: Vec<String>, #[serde(default)] path_missing: bool }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AppliedState { fingerprint: String, pending_restart: bool, has_rules: bool }
@@ -101,6 +101,7 @@ fn reconcile_entry(previous: &AppEntry, mut live: AppEntry) -> AppEntry {
     }
     paths.entry(live.path.to_lowercase()).or_insert_with(|| live.path.clone());
     live.processes = paths.into_values().collect();
+    live.suggested_processes.retain(|path| !live.processes.iter().any(|p| p.eq_ignore_ascii_case(path)));
     live.name = previous.name.clone();
     live.path_missing = false;
     if removed > 0 { live.warnings.push(format!("已清理 {removed} 个失效的辅助程序路径，当前选择需重新应用")); }
@@ -143,6 +144,22 @@ fn script_path(dir: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 fn original_script(path: &Path) -> Result<String> { fs::read_to_string(path).map_err(|e| format!("无法读取原脚本：{e}")) }
+#[tauri::command]
+async fn diagnose_routing(config_dir: String) -> Result<serde_json::Value> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = self::config_dir(&config_dir)?;
+        let bytes = fs::read(dir.join("clash-verge.yaml")).map_err(|_| "无法读取 Clash 运行配置，请先启动 Clash")?;
+        let config: serde_yaml::Value = serde_yaml::from_slice(&bytes).map_err(|_| "Clash 运行配置格式异常")?;
+        let pipe = config.get("external-controller-pipe").and_then(|v| v.as_str()).ok_or("未找到本机命名管道诊断接口；暂时无法验证实际连接")?;
+        let prefix = r"\\.\pipe\";
+        if !pipe.starts_with(prefix) || pipe.len() <= prefix.len() || pipe[prefix.len()..].chars().any(|c| !c.is_ascii_alphanumeric() && !matches!(c, '-' | '_' | '.')) {
+            return Err("诊断接口必须是本机命名管道，未修改 Clash 配置".into());
+        }
+        let script = format!("$controller = '{}'\n{}", pipe, include_str!("../scripts/diagnose.ps1"));
+        let output = powershell(&script, None).map_err(|_| "无法读取 Clash 实际连接，请确认 Clash 已启动且允许访问本机诊断接口".to_string())?;
+        serde_json::from_str(&output).map_err(|_| "无法解析 Clash 连接诊断结果".into())
+    }).await.map_err(|e| e.to_string())?
+}
 fn verify_ownership(manifest: &Manifest, key: &str, current: &Option<String>) -> Result<()> {
     if let Some(block) = current {
         if !manifest.issued_blocks.get(key).map(|v| v.contains(block)).unwrap_or(false) { return Err("本工具规则段被外部修改或缺少本机记录，已停止写入。请从备份检查恢复".into()); }
@@ -243,7 +260,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| { if let Some(w) = app.get_webview_window("main") { let _ = w.set_focus(); } }))
         .plugin(tauri_plugin_dialog::init())
         .manage(OperationLock(Mutex::new(())))
-        .invoke_handler(tauri::generate_handler![load_settings, save_settings, scan_apps, inspect_app, refresh_selected, inspect_integration, apply_rules, remove_rules])
+        .invoke_handler(tauri::generate_handler![load_settings, save_settings, scan_apps, inspect_app, refresh_selected, inspect_integration, apply_rules, remove_rules, diagnose_routing])
         .run(tauri::generate_context!()).expect("无法启动直连助手");
 }
 
@@ -259,7 +276,7 @@ mod tests {
         for path in [&main, &helper, &fresh] { fs::write(path, b"fixture").unwrap(); }
         let old = AppEntry { id: "app".into(), name: "Friendly name".into(), path: main.to_string_lossy().into(), running: false,
             processes: vec![main.to_string_lossy().into(), helper.to_string_lossy().into(), dir.join("removed.exe").to_string_lossy().into()],
-            source: "test".into(), warnings: vec![], path_missing: false };
+            suggested_processes: vec![], source: "test".into(), warnings: vec![], path_missing: false };
         let live = AppEntry { processes: vec![main.to_string_lossy().into(), fresh.to_string_lossy().into()], name: "Filename".into(), ..old.clone() };
         let updated = reconcile_entry(&old, live);
         assert_eq!(updated.processes.len(), 3);

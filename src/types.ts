@@ -4,6 +4,7 @@ export interface AppEntry {
   path: string;
   running: boolean;
   processes: string[];
+  suggestedProcesses?: string[];
   source: string;
   warnings: string[];
   pathMissing?: boolean;

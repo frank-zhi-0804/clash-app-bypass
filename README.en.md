@@ -4,7 +4,7 @@
 
 [中文](README.md) | **English**
 
-A Windows application bypass assistant for Clash Verge Rev. Select applications that should connect directly, inspect related processes, and generate rules matching their full executable paths. This is an independent third-party project, unaffiliated with Clash Verge Rev. Current source version: **0.1.3**. The application interface is currently in Chinese.
+A Windows application bypass assistant for Clash Verge Rev. Select applications that should connect directly, inspect related processes, and generate rules matching their full executable paths. This is an independent third-party project, unaffiliated with Clash Verge Rev. Current source version: **0.1.4**. The application interface is currently in Chinese.
 
 ## Features
 
@@ -96,3 +96,9 @@ The author has run and verified the published v0.1.1 on Windows. CI checks routi
 ## License
 
 [MIT](LICENSE). The project code was independently written without copying source from Clash Verge Rev or other application routing tools.
+
+## Association and live routing checks (0.1.4)
+
+Startup and rescanning refresh selected applications. In addition to known helpers, the current process ancestry supplies candidate executables for review. Confirm a candidate and reapply the rules to include it; applications opened by a launcher are not silently bypassed.
+
+Open the selected application and create new connections, then click the live connection check button. Diagnostics only read the local named-pipe Clash API from the selected configuration directory, without changing modes, interfaces, rules, or permissions. TCP-only controllers are not supported for diagnostics. Results distinguish missing loaded rules, incorrect routing mode, proxy traffic, rejected connections, observed direct traffic, and no observable traffic. Connections without process paths are reported separately. Snapshots include existing connections and cannot guarantee complete process discovery; exited launchers, protected processes, or unknown installation layouts may still require manual additions.

@@ -64,6 +64,26 @@ try {
   $result = Invoke-Expression $scanSource | ConvertFrom-Json
   if ($result.processes -contains $gamePaths[1]) { throw 'Incomplete installation incorrectly identified as Valorant' }
   Write-Output 'PASS: Valorant launcher and game anchors, sibling main programs, unrelated and incomplete installations'
+  $childPath = Join-Path $otherDir 'network-child.exe'
+  $grandchildPath = Join-Path $otherDir 'network-grandchild.exe'
+  @($childPath, $grandchildPath) | ForEach-Object { [IO.File]::WriteAllText($_, 'fixture, not executable') }
+  $created = [DateTime]::UtcNow.AddMinutes(-5)
+  $mockInventory = @(
+    [pscustomobject]@{ ProcessId = 1; ParentProcessId = 0; CreationDate = $created; ExecutablePath = $mainPath },
+    [pscustomobject]@{ ProcessId = 2; ParentProcessId = 1; CreationDate = $created.AddSeconds(1); ExecutablePath = $childPath },
+    [pscustomobject]@{ ProcessId = 3; ParentProcessId = 2; CreationDate = $created.AddSeconds(2); ExecutablePath = $null },
+    [pscustomobject]@{ ProcessId = 4; ParentProcessId = 3; CreationDate = $created.AddSeconds(3); ExecutablePath = $grandchildPath },
+    [pscustomobject]@{ ProcessId = 5; ParentProcessId = 1; CreationDate = $created.AddSeconds(-1); ExecutablePath = $externalPath }
+  )
+  function Get-CimInstance { param([string]$ClassName) $mockInventory }
+  $env:VERGE_DIRECT_INSPECT = $mainPath
+  $result = Invoke-Expression $scanSource | ConvertFrom-Json
+  foreach ($candidate in @($childPath, $grandchildPath)) {
+    if ($result.suggestedProcesses -notcontains $candidate) { throw 'Startup-chain helper was not suggested' }
+    if ($result.processes -contains $candidate) { throw 'Unconfirmed startup-chain helper was silently added' }
+  }
+  if ($result.suggestedProcesses -contains $externalPath) { throw 'Reused parent PID incorrectly associated an old process' }
+  Write-Output 'PASS: external startup-chain candidates, unreadable intermediate processes, PID reuse, no silent association'
 } finally {
   $env:VERGE_DIRECT_INSPECT = $oldInspect
   # Cleanup is strictly limited to the unique fixture directory created above.
