@@ -9,7 +9,7 @@ function Get-ValorantPaths([string]$path) {
     $prefix = $root.TrimEnd('\') + '\'
     $anchors = @('WeGameLauncher\launcher.exe', 'live\VALORANT.exe', 'live\ShooterGame\Binaries\Win64\VALORANT-Win64-Shipping.exe', 'ACLOS\aclos-launcher.exe', 'ACLOS\Launcher\无畏契约登录器.exe')
     if ($anchors -icontains $path.Substring($prefix.Length)) {
-      $relative = @('live\VALORANT.exe', 'live\ShooterGame\Binaries\Win64\VALORANT-Win64-Shipping.exe', 'WeGameLauncher\launcher.exe', 'WeGameLauncher\TenioDL\TenioDL.exe', 'ACLOS\aclos-launcher.exe', 'ACLOS\Launcher\无畏契约登录器.exe', 'ACLOS\Cross\Core\Stable\CrossProxy.exe', 'ACLOS\Cross\qbblinktrial\browser.exe')
+      $relative = @('live\VALORANT.exe', 'live\ShooterGame\Binaries\Win64\VALORANT-Win64-Shipping.exe', 'WeGameLauncher\launcher.exe', 'WeGameLauncher\TenioDL\TenioDL.exe', 'ACLOS\aclos-launcher.exe', 'ACLOS\Launcher\无畏契约登录器.exe', 'ACLOS\Proxy\AclosGameProxy.exe', 'ACLOS\Cross\Core\Stable\CrossProxy.exe', 'ACLOS\Cross\qbblinktrial\browser.exe')
       $safe = @()
       foreach ($item in $relative) {
         $candidate = Join-Path $root $item

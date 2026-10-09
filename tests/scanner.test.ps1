@@ -46,7 +46,7 @@ try {
     Write-Output "PASS: $($case.Main) associates $($case.Helper) without matching unrelated executables"
   }
   $gameRoot = Join-Path $testRoot 'Valorant'
-  $gameRelative = @('WeGameLauncher\launcher.exe', 'live\VALORANT.exe', 'live\ShooterGame\Binaries\Win64\VALORANT-Win64-Shipping.exe', 'live\other-game.exe')
+  $gameRelative = @('WeGameLauncher\launcher.exe', 'live\VALORANT.exe', 'live\ShooterGame\Binaries\Win64\VALORANT-Win64-Shipping.exe', 'live\other-game.exe', 'ACLOS\Proxy\AclosGameProxy.exe')
   $gamePaths = @($gameRelative | ForEach-Object { Join-Path $gameRoot $_ })
   foreach ($fixture in $gamePaths) {
     New-Item -ItemType Directory -Path (Split-Path -Parent $fixture) -Force | Out-Null
@@ -56,6 +56,7 @@ try {
     $env:VERGE_DIRECT_INSPECT = $anchor
     $result = Invoke-Expression $scanSource | ConvertFrom-Json
     foreach ($main in $gamePaths[1..2]) { if ($result.processes -notcontains $main) { throw 'Missing Valorant main executable' } }
+    if ($result.processes -notcontains $gamePaths[4]) { throw 'Missing observed Valorant network helper' }
     if ($result.processes -contains $gamePaths[3]) { throw 'Unrelated game executable was associated' }
   }
   Remove-Item -LiteralPath $gamePaths[2]
