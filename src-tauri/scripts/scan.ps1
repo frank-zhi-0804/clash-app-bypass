@@ -3,6 +3,29 @@ $ErrorActionPreference = 'Stop'
 $entries = @{}
 $processes = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.EndsWith('.exe', [StringComparison]::OrdinalIgnoreCase) })
 $windowsRoot = [IO.Path]::GetFullPath($env:WINDIR).TrimEnd('\') + '\'
+function Get-ValorantPaths([string]$path) {
+  $root = [IO.Path]::GetDirectoryName($path)
+  for ($depth = 0; $root -and $depth -lt 6; $depth++) {
+    $prefix = $root.TrimEnd('\') + '\'
+    $anchors = @('WeGameLauncher\launcher.exe', 'live\VALORANT.exe', 'live\ShooterGame\Binaries\Win64\VALORANT-Win64-Shipping.exe', 'ACLOS\aclos-launcher.exe', 'ACLOS\Launcher\无畏契约登录器.exe')
+    if ($anchors -icontains $path.Substring($prefix.Length)) {
+      $relative = @('live\VALORANT.exe', 'live\ShooterGame\Binaries\Win64\VALORANT-Win64-Shipping.exe', 'WeGameLauncher\launcher.exe', 'WeGameLauncher\TenioDL\TenioDL.exe', 'ACLOS\aclos-launcher.exe', 'ACLOS\Launcher\无畏契约登录器.exe', 'ACLOS\Cross\Core\Stable\CrossProxy.exe', 'ACLOS\Cross\qbblinktrial\browser.exe')
+      $safe = @()
+      foreach ($item in $relative) {
+        $candidate = Join-Path $root $item
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+        $cursor = $candidate; $linked = $false
+        while ($cursor) {
+          if (((Get-Item -LiteralPath $cursor).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { $linked = $true; break }
+          $cursor = [IO.Path]::GetDirectoryName($cursor)
+        }
+        if (-not $linked) { $safe += $candidate }
+      }
+      if ($safe -icontains (Join-Path $root $relative[0]) -and $safe -icontains (Join-Path $root $relative[1])) { return $safe }
+    }
+    $root = [IO.Path]::GetDirectoryName($root)
+  }
+}
 function Add-App([string]$path, [string]$name, [string]$source) {
   if (-not $path -or -not $path.EndsWith('.exe', [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { return }
   try { $full = [IO.Path]::GetFullPath($path) } catch { return }
@@ -70,6 +93,11 @@ foreach ($entry in $entries.Values) {
     if ($isRelated) { $entry.processes += $candidate }
   }
   $entry.processes = @($entry.processes | Select-Object -Unique)
+  $valorantPaths = @(Get-ValorantPaths $entry.path)
+  if ($valorantPaths.Count -gt 0) {
+    $entry.processes = @(@($entry.processes + $valorantPaths) | Select-Object -Unique)
+    $entry.warnings += '已按无畏契约安装结构关联游戏主程序和登录辅助程序。'
+  }
   $entry.warnings += '只关联同产品信息或已知辅助进程，目录外的共享服务需要单独添加。'
 }
 ConvertTo-Json -InputObject @($entries.Values | Sort-Object name) -Depth 5 -Compress

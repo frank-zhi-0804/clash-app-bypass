@@ -45,6 +45,24 @@ try {
     if ($result.processes -contains $externalPath) { throw 'External helper was associated' }
     Write-Output "PASS: $($case.Main) associates $($case.Helper) without matching unrelated executables"
   }
+  $gameRoot = Join-Path $testRoot 'Valorant'
+  $gameRelative = @('WeGameLauncher\launcher.exe', 'live\VALORANT.exe', 'live\ShooterGame\Binaries\Win64\VALORANT-Win64-Shipping.exe', 'live\other-game.exe')
+  $gamePaths = @($gameRelative | ForEach-Object { Join-Path $gameRoot $_ })
+  foreach ($fixture in $gamePaths) {
+    New-Item -ItemType Directory -Path (Split-Path -Parent $fixture) -Force | Out-Null
+    [IO.File]::WriteAllText($fixture, 'fixture, not executable')
+  }
+  foreach ($anchor in $gamePaths[0..2]) {
+    $env:VERGE_DIRECT_INSPECT = $anchor
+    $result = Invoke-Expression $scanSource | ConvertFrom-Json
+    foreach ($main in $gamePaths[1..2]) { if ($result.processes -notcontains $main) { throw 'Missing Valorant main executable' } }
+    if ($result.processes -contains $gamePaths[3]) { throw 'Unrelated game executable was associated' }
+  }
+  Remove-Item -LiteralPath $gamePaths[2]
+  $env:VERGE_DIRECT_INSPECT = $gamePaths[0]
+  $result = Invoke-Expression $scanSource | ConvertFrom-Json
+  if ($result.processes -contains $gamePaths[1]) { throw 'Incomplete installation incorrectly identified as Valorant' }
+  Write-Output 'PASS: Valorant launcher and game anchors, sibling main programs, unrelated and incomplete installations'
 } finally {
   $env:VERGE_DIRECT_INSPECT = $oldInspect
   # Cleanup is strictly limited to the unique fixture directory created above.

@@ -4,10 +4,11 @@
 
 [中文](README.md) | **English**
 
-A Windows application bypass assistant for Clash Verge Rev. Select applications that should connect directly, inspect related processes, and generate rules matching their full executable paths. This is an independent third-party project, unaffiliated with Clash Verge Rev. Current source version: **0.1.2**. The application interface is currently in Chinese.
+A Windows application bypass assistant for Clash Verge Rev. Select applications that should connect directly, inspect related processes, and generate rules matching their full executable paths. This is an independent third-party project, unaffiliated with Clash Verge Rev. Current source version: **0.1.3**. The application interface is currently in Chinese.
 
 ## Features
 
+- VALORANT WeGame launchers associate the game executables, login launcher, and known network helpers within the same installation, covering executable paths outside the launcher directory.
 - Scan Start Menu and desktop shortcuts and running processes with readable paths; manually add `.exe` files.
 - Search applications, filter running or selected entries, and inspect related processes.
 - Associate executables in the application's directory using product metadata and a small list of known helper names.
