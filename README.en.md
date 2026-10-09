@@ -36,13 +36,13 @@ The author has confirmed that the published v0.1.1 works on their own Windows co
 1. Open the desktop app and wait for scanning. If automatic detection fails, select the Clash Verge Rev configuration folder containing `profiles.yaml` in Settings (`设置`).
 2. Enable “Do not use proxy” (`不使用代理`) for applications that should connect directly. Expand each entry to review associated processes.
 3. Configure “Other traffic” (`其他流量`). The default is “Use proxy” (`使用代理`) with the `GLOBAL` group. Ensure that group ultimately selects a working proxy rather than `DIRECT`.
-4. **Fully exit Clash Verge Rev from the system tray**, including its core.
-5. Click “Apply to Clash” (`应用到 Clash`), reopen Clash Verge Rev, and use **Rule mode**. Enable TUN if you need to capture applications that ignore the system proxy.
-6. Inspect new connections in Clash to confirm `DIRECT` for selected applications and the expected proxy for other traffic.
+4. Selections are saved and synchronized automatically. Running Clash receives a verified live update without a manual restart. While open, the assistant refreshes associations and rule status approximately every 30 seconds.
+5. Inspect status and new connections for `DIRECT`. Enable TUN in Clash if you need to capture applications that ignore the system proxy.
+6. When switching existing proxy fallback rules to “Follow subscription rules” or undoing them, follow the prompt to exit Clash first so the original subscription configuration can be restored.
 
 The default rule order is “selected executable paths → DIRECT; remaining traffic → MATCH,selected proxy group”. This overrides subscription routing rules in the runtime configuration while preserving the subscription source and original script. “Follow subscription rules” (`遵循订阅规则`) retains subscription routing and does not guarantee that a particular website uses a proxy.
 
-Deselect an application and apply again to remove its direct rules. With no applications selected, “Use proxy” still retains the default proxy rule. “Undo this tool's rules” (`撤销本工具规则`) removes the managed section while keeping application selections.
+Deselecting an application automatically synchronizes and removes its direct rules. With no applications selected, “Use proxy” still retains the default proxy rule. “Undo this tool's rules” (`撤销本工具规则`) removes the managed section while keeping application selections.
 
 ## Scope and limitations
 
@@ -52,7 +52,7 @@ Deselect an application and apply again to remove its direct rules. With no appl
 - Re-add applications when the main executable path changes. Missing helper paths are removed before refresh or application; existing historical helper paths are retained.
 - The integration expects the global script structure with `uid: Script`. Unsupported entry points or scripts outside the configuration directory cause the operation to stop.
 - Subscription extensions can override global rules or process detection settings. Check the final configuration and actual connections.
-- Successful application means the script was written. Existing connections may keep their previous route. Exiting and restarting Clash is required; live refresh and background rule updates are not implemented.
+- Successful live application verifies core rules; actual routing still requires new connections. Existing connections may keep their previous route. Rules remain after closing the assistant, but automatic association refresh stops.
 
 ## Local data, backups, and undo
 

@@ -19,7 +19,7 @@ test('selection changes apply automatically and unchanged healthy rules do not r
   await synchronize(first.settings, f.api); assert.deepEqual(f.calls, ['apply', 'save']);
 });
 test('missing rules after an external reload trigger repair even with unchanged selections', async () => {
-  const f = fixtures({ running: true }); const settings = { ...base, applied: { fingerprint: routingFingerprint(base), hasRules: true, pendingRestart: false } };
+  const f = fixtures({ running: true }); const settings = { ...base, applied: { revision: 2, fingerprint: routingFingerprint(base), hasRules: true, pendingRestart: false } };
   await synchronize(settings, f.api); assert.equal(f.calls[0], 'apply');
 });
 test('offline apply reports pending startup and fresh empty installs remain untouched', async () => {
@@ -28,4 +28,12 @@ test('offline apply reports pending startup and fresh empty installs remain unto
 });
 test('failed apply never saves a success state', async () => {
   const f = fixtures({ fail: true }); await assert.rejects(synchronize(base, f.api), /conflict/); assert.deepEqual(f.calls, ['apply']);
+});
+
+test("upgraded routing is applied once even when all previous paths are loaded", async () => {
+  const f = fixtures({ running: true, rules: [path] });
+  const settings = { ...base, applied: { fingerprint: routingFingerprint(base), hasRules: true, pendingRestart: false } };
+  const upgraded = await synchronize(settings, f.api);
+  await synchronize(upgraded.settings, f.api);
+  assert.deepEqual(f.calls, ["apply", "save"]);
 });

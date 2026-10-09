@@ -16,7 +16,7 @@ struct OperationLock(Mutex<()>);
 struct AppEntry { id: String, name: String, path: String, running: bool, processes: Vec<String>, #[serde(default)] suggested_processes: Vec<String>, source: String, warnings: Vec<String>, #[serde(default)] path_missing: bool }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AppliedState { fingerprint: String, pending_restart: bool, has_rules: bool }
+struct AppliedState { #[serde(default)] revision: u32, fingerprint: String, pending_restart: bool, has_rules: bool }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Settings { #[serde(default)] selected: Vec<AppEntry>, #[serde(default)] config_dir: String, #[serde(default)] dark: bool, #[serde(default = "default_mode")] other_traffic: String, #[serde(default = "default_group")] proxy_group: String, #[serde(default)] applied: Option<AppliedState> }

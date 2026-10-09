@@ -5,7 +5,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import * as api from './api';
 import type { AppEntry, Integration, Settings } from './types';
 import { makeTheme } from './theme';
-import { synchronize } from './automation';
+import { synchronize, ROUTING_REVISION } from './automation';
 import { applicationStatus, readWorkspace, routingFingerprint } from './workflow';
 import { diagnoseApp } from './routingDiagnostics';
 import type { RoutingSnapshot } from './routingDiagnostics';
@@ -146,7 +146,7 @@ export default function App() {
     }
     const res = action === 'apply' ? await api.applyRules(chosen, settings.configDir, settings.otherTraffic, settings.proxyGroup) : await api.removeRules(settings.configDir);
     const next: Settings = { ...settings, selected: chosen };
-    next.applied = { fingerprint: routingFingerprint(next), pendingRestart: res.pendingRestart ?? api.desktop, hasRules: action === 'apply' && (chosen.length > 0 || settings.otherTraffic === 'proxy') };
+    next.applied = { revision: ROUTING_REVISION, fingerprint: routingFingerprint(next), pendingRestart: res.pendingRestart ?? api.desktop, hasRules: action === 'apply' && (chosen.length > 0 || settings.otherTraffic === 'proxy') };
     setSettings(next); setResult(res.message); setToast(res.message);
     // A settings/detection failure after writing must not masquerade as a failed rule write.
     const followup = await Promise.allSettled([api.saveSettings(next), api.integration(settings.configDir)]);

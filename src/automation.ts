@@ -1,6 +1,7 @@
 import { routingFingerprint } from './workflow.ts';
 import type { AppEntry, Integration, OperationResult, Settings } from './types.ts';
 import type { RoutingSnapshot } from './routingDiagnostics.ts';
+export const ROUTING_REVISION = 2;
 export interface AutomationServices {
   refresh(apps: AppEntry[]): Promise<AppEntry[]>;
   integration(dir: string): Promise<Integration>;
@@ -16,14 +17,14 @@ export async function synchronize(settings: Settings, services: AutomationServic
   if (missing.length) throw new Error(`程序路径已失效，请重新选择：${missing.map(a => a.name).join('、')}`);
   const snapshot = integration.running ? await services.diagnose(next.configDir) : undefined;
   const fingerprint = routingFingerprint(next);
-  const dirty = fingerprint !== next.applied?.fingerprint;
+  const dirty = fingerprint !== next.applied?.fingerprint || next.applied?.revision !== ROUTING_REVISION;
   const rules = new Set(snapshot?.rules.map(p => p.toLowerCase()));
   const incomplete = snapshot && (snapshot.mode !== 'rule' || next.selected.some(a => a.processes.some(p => !rules.has(p.toLowerCase()))));
   let message = '';
   // Do not enable proxy fallback on a fresh install before the user chooses an app.
   if ((next.selected.length || next.applied?.hasRules) && (dirty || incomplete)) {
     const applied = await services.apply(next.selected, next.configDir, next.otherTraffic, next.proxyGroup);
-    next = { ...next, applied: { fingerprint, pendingRestart: applied.pendingRestart ?? !integration.running, hasRules: next.selected.length > 0 || next.otherTraffic === 'proxy' } };
+    next = { ...next, applied: { fingerprint, revision: ROUTING_REVISION, pendingRestart: applied.pendingRestart ?? !integration.running, hasRules: next.selected.length > 0 || next.otherTraffic === 'proxy' } };
     message = applied.message;
   } else if (snapshot && !incomplete && next.applied?.pendingRestart) {
     next = { ...next, applied: { ...next.applied, pendingRestart: false } };

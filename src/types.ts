@@ -9,7 +9,7 @@ export interface AppEntry {
   warnings: string[];
   pathMissing?: boolean;
 }
-export interface AppliedState { fingerprint: string; pendingRestart: boolean; hasRules: boolean; }
+export interface AppliedState { revision?: number; fingerprint: string; pendingRestart: boolean; hasRules: boolean; }
 export interface Settings { selected: AppEntry[]; configDir: string; dark: boolean; otherTraffic: 'proxy' | 'subscription'; proxyGroup: string; applied?: AppliedState | null; }
 export interface Integration {
   configDir: string;
