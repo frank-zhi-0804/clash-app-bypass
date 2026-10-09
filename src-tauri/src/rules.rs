@@ -4,7 +4,11 @@ pub const BEGIN: &str = "// <clash-app-bypass:managed:v1>";
 pub const END: &str = "// </clash-app-bypass:managed:v1>";
 const WRAPPER: &str = include_str!("../../shared/managed-wrapper.js");
 
-pub fn make_block(paths: &[String]) -> Result<String, String> {
+pub fn make_block(paths: &[String], mode: &str, proxy_group: &str) -> Result<String, String> {
+    if mode != "proxy" && mode != "subscription" { return Err("其他流量模式无效".into()); }
+    if mode == "proxy" && (proxy_group.trim().is_empty() || proxy_group.chars().any(|c| matches!(c, ',' | '\n' | '\r')) || ["DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE"].contains(&proxy_group.to_uppercase().as_str())) {
+        return Err("请选择有效的代理组，不能选择 DIRECT 或 REJECT".into());
+    }
     let mut rules = BTreeSet::new();
     for path in paths {
         if path.chars().any(|c| matches!(c, ',' | '\n' | '\r')) || !Path::new(path).is_absolute() || !path.to_lowercase().ends_with(".exe") {
@@ -13,7 +17,8 @@ pub fn make_block(paths: &[String]) -> Result<String, String> {
         rules.insert(format!("PROCESS-PATH,{path},DIRECT"));
     }
     let json = serde_json::to_string(&rules).map_err(|e| e.to_string())?;
-    Ok(format!("{BEGIN}\n{}\n{END}", WRAPPER.replace("__VERGE_DIRECT_RULES__", &json)))
+    let routing = serde_json::json!({ "mode": mode, "proxyGroup": proxy_group });
+    Ok(format!("{BEGIN}\n{}\n{END}", WRAPPER.replace("__VERGE_DIRECT_RULES__", &json).replace("__VERGE_DIRECT_ROUTING__", &routing.to_string())))
 }
 
 pub fn split_managed(source: &str) -> Result<(String, Option<String>), String> {
@@ -40,6 +45,13 @@ pub fn compose(original: &str, block: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test] fn validates_routing_and_keeps_proxy_mode_without_apps() {
+        assert!(make_block(&[], "proxy", "GLOBAL").unwrap().contains("GLOBAL"));
+        assert!(make_block(&[], "proxy", "DIRECT").is_err());
+        assert!(make_block(&[], "proxy", "bad,group").is_err());
+        assert!(make_block(&[], "unknown", "GLOBAL").is_err());
+        assert!(make_block(&[], "subscription", "").is_ok());
+    }
     #[test] fn removes_only_owned_tail() {
         let block = format!("{BEGIN}\nhello\n{END}");
         let input = format!("function main(c) {{ return c; }}\n{block}\n");

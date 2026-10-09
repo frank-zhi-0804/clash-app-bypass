@@ -11,8 +11,8 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
       - uses: dtolnay/rust-toolchain@stable
@@ -32,7 +32,7 @@ jobs:
       - name: Package desktop app
         run: npm run desktop:build
       - name: Upload Windows installer and portable executable
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: clash-app-bypass-windows-x64
           path: |
@@ -40,7 +40,7 @@ jobs:
             src-tauri/target/release/clash-app-bypass.exe
           if-no-files-found: error
       - name: Upload dependency lock files
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: dependency-lockfiles
           path: |
