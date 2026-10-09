@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod rules;
+mod live;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -29,7 +30,21 @@ impl Default for Settings {
 struct Integration { config_dir: String, found: bool, running: bool, managed: bool, message: String, proxy_groups: Vec<String> }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct OperationResult { message: String, rule_count: usize }
+struct OperationResult { message: String, rule_count: usize, pending_restart: bool }
+#[derive(Serialize, Deserialize)]
+struct LiveJournal { script_path: PathBuf, runtime_path: PathBuf, old_script: String, new_script: String, old_runtime: String, new_runtime: String }
+fn pipe_controller(config: &serde_yaml::Value) -> Result<String> {
+    let pipe = config.get("external-controller-pipe").and_then(|v| v.as_str()).ok_or("未找到本机在线接口，请退出 Clash 后应用")?;
+    let prefix = r"\\.\pipe\";
+    if !pipe.starts_with(prefix) || pipe.len() <= prefix.len() || pipe[prefix.len()..].chars().any(|c| !c.is_ascii_alphanumeric() && !matches!(c, '-' | '_' | '.')) {
+        return Err("在线接口必须是本机命名管道".into());
+    }
+    Ok(pipe.into())
+}
+fn live_api(packet: &serde_json::Value) -> Result<()> {
+    powershell_input(include_str!("../scripts/live-api.ps1"), None, Some(&packet.to_string()))
+        .map(|_| ()).map_err(|_| "在线配置检查或加载失败，请刷新 Clash 配置后重试".into())
+}
 #[derive(Default, Serialize, Deserialize)]
 struct Manifest { #[serde(default)] issued_blocks: BTreeMap<String, Vec<String>> }
 
@@ -55,17 +70,23 @@ fn read_json<T: serde::de::DeserializeOwned + Default>(path: &Path) -> Result<T>
 fn write_json<T: Serialize>(path: &Path, data: &T) -> Result<()> { atomic_write(path, &serde_json::to_vec_pretty(data).map_err(|e| e.to_string())?) }
 
 fn powershell(script: &str, inspect: Option<&str>) -> Result<String> {
-    #[cfg(not(windows))] { let _ = (script, inspect); return Err("第一版仅支持 Windows".into()); }
+    powershell_input(script, inspect, None)
+}
+fn powershell_input(script: &str, inspect: Option<&str>, input: Option<&str>) -> Result<String> {
+    #[cfg(not(windows))] { let _ = (script, inspect, input); return Err("第一版仅支持 Windows".into()); }
     #[cfg(windows)] {
         use std::os::windows::process::CommandExt;
         let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
         let shell = PathBuf::from(std::env::var("WINDIR").map_err(|_| "无法找到 Windows 目录")?).join("System32/WindowsPowerShell/v1.0/powershell.exe");
         let mut command = Command::new(shell);
         command.args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &STANDARD.encode(bytes)])
-            .creation_flags(0x08000000).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+            .creation_flags(0x08000000).stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
         command.env_remove("VERGE_DIRECT_INSPECT");
         if let Some(path) = inspect { command.env("VERGE_DIRECT_INSPECT", path); }
         let mut child = command.spawn().map_err(|e| format!("无法启动 Windows 扫描：{e}"))?;
+        if let Some(input) = input {
+            child.stdin.take().ok_or("无法传入本机配置")?.write_all(input.as_bytes()).map_err(|_| "无法传入本机配置")?;
+        }
         // Drain pipes concurrently to avoid a full stdout pipe deadlocking large scans.
         let stdout = child.stdout.take().ok_or("无法读取扫描输出")?;
         let stderr = child.stderr.take().ok_or("无法读取扫描错误")?;
@@ -184,8 +205,21 @@ fn modify_rules(app: &tauri::AppHandle, apps: &[AppEntry], input: &str, remove: 
     let data = data_dir(app)?;
     let lock = fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(data.join("operation.lock")).map_err(|e| e.to_string())?;
     lock.try_lock_exclusive().map_err(|_| "另一个直连助手正在修改规则，请稍后重试")?;
-    if clash_running()? { return Err("Clash Verge 或其内核仍在运行。请从系统托盘完全退出后重试".into()); }
+    let running = clash_running()?;
     let dir = config_dir(input)?; let path = script_path(&dir)?;
+    let journal_path = data.join("pending-live.json");
+    if journal_path.exists() {
+        if running { return Err("上次在线操作中断，请完全退出 Clash 后应用一次以恢复".into()); }
+        let journal: LiveJournal = serde_json::from_slice(&fs::read(&journal_path).map_err(|e| e.to_string())?).map_err(|_| "恢复记录格式异常")?;
+        if journal.script_path != path || journal.runtime_path != dir.join("clash-verge.yaml") { return Err("恢复记录对应另一份配置，请先检查".into()); }
+        for (file, old, new) in [(&journal.script_path, &journal.old_script, &journal.new_script), (&journal.runtime_path, &journal.old_runtime, &journal.new_runtime)] {
+            let current = original_script(file)?;
+            if current != *old && current != *new { return Err("恢复文件已被其他程序修改，已保留现场".into()); }
+        }
+        atomic_write(&path, journal.old_script.as_bytes())?;
+        atomic_write(&journal.runtime_path, journal.old_runtime.as_bytes())?;
+        fs::remove_file(&journal_path).map_err(|e| e.to_string())?;
+    }
     let source = original_script(&path)?;
     let (base, current) = rules::split_managed(&source)?;
     let manifest_path = data.join("ownership.json");
@@ -193,7 +227,7 @@ fn modify_rules(app: &tauri::AppHandle, apps: &[AppEntry], input: &str, remove: 
     let key = path.to_string_lossy().to_lowercase(); verify_ownership(&manifest, &key, &current)?;
     let paths: Vec<String> = apps.iter().flat_map(|a| a.processes.clone()).collect();
     let remove = remove || (paths.is_empty() && mode == "subscription");
-    if remove && current.is_none() { return Ok(OperationResult { message: "当前没有本工具规则，无需撤销".into(), rule_count: 0 }); }
+    if remove && current.is_none() { return Ok(OperationResult { message: "当前没有本工具规则，无需撤销".into(), rule_count: 0, pending_restart: false }); }
     if !remove && mode == "proxy" && !proxy_groups(&dir).iter().any(|name| name == group) {
         return Err("所选代理组已不存在，请刷新订阅后重新检测并选择代理组".into());
     }
@@ -206,6 +240,16 @@ fn modify_rules(app: &tauri::AppHandle, apps: &[AppEntry], input: &str, remove: 
         for path in &paths { if !Path::new(path).is_file() { return Err(format!("程序路径已失效，请重新扫描或取消选择：{path}")); } }
     }
     let new_source = match &block { Some(b) => rules::compose(&source, b)?, None => base };
+    let runtime_path = dir.join("clash-verge.yaml");
+    let online = if running {
+        let old_runtime = original_script(&runtime_path)?;
+        let (new_runtime, previous_rules, next_rules) = live::plan(&old_runtime, current.as_deref(), block.as_deref())?;
+        let general: serde_yaml::Value = serde_yaml::from_str(&old_runtime).map_err(|_| "运行配置格式异常")?;
+        let controller = pipe_controller(&general)?;
+        let packet = serde_json::json!({"action":"preflight", "controller":controller, "general":general, "previousRules":previous_rules, "nextRules":next_rules, "payload":new_runtime});
+        live_api(&packet)?;
+        Some((old_runtime, new_runtime, packet))
+    } else { None };
     let backups = data.join("backups"); fs::create_dir_all(&backups).map_err(|e| e.to_string())?;
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos();
     atomic_write(&backups.join(format!("Script-{stamp}.js")), source.as_bytes())?;
@@ -216,10 +260,34 @@ fn modify_rules(app: &tauri::AppHandle, apps: &[AppEntry], input: &str, remove: 
         write_json(&manifest_path, &manifest)?;
     }
     // Optimistic concurrency guard against another editor or a newly restarted Clash instance.
-    if clash_running()? || original_script(&path)? != source { return Err("Clash 已启动或脚本在操作期间被修改，已停止应用，请重试".into()); }
-    atomic_write(&path, new_source.as_bytes())?;
+    if clash_running()? != running || original_script(&path)? != source { return Err("Clash 状态或脚本在操作期间变化，已停止应用，请重试".into()); }
+    if let Some((old_runtime, new_runtime, mut packet)) = online {
+        if original_script(&runtime_path)? != old_runtime { return Err("运行配置已被其他程序修改，请重试".into()); }
+        let journal = LiveJournal { script_path: path.clone(), runtime_path: runtime_path.clone(), old_script: source.clone(), new_script: new_source.clone(), old_runtime: old_runtime.clone(), new_runtime: new_runtime.clone() };
+        write_json(&journal_path, &journal)?;
+        atomic_write(&backups.join(format!("Runtime-{stamp}.yaml")), old_runtime.as_bytes())?;
+        packet["action"] = serde_json::json!("apply");
+        let result = (|| {
+            atomic_write(&path, new_source.as_bytes())?;
+            atomic_write(&runtime_path, new_runtime.as_bytes())?;
+            live_api(&packet)?;
+            if original_script(&path)? != new_source || original_script(&runtime_path)? != new_runtime { return Err("其他程序在应用期间更新了配置".into()); }
+            Ok::<(), String>(())
+        })();
+        if let Err(error) = result {
+            let script_now = original_script(&path)?; let runtime_now = original_script(&runtime_path)?;
+            if (script_now != source && script_now != new_source) || (runtime_now != old_runtime && runtime_now != new_runtime) { return Err(format!("{error}；发现外部修改，未覆盖配置，请先退出 Clash 检查恢复记录")); }
+            atomic_write(&path, source.as_bytes())?;
+            atomic_write(&runtime_path, old_runtime.as_bytes())?;
+            let restore = serde_json::json!({"action":"restore", "controller":packet["controller"], "payload":old_runtime, "previousRules":packet["nextRules"], "nextRules":packet["previousRules"]});
+            if live_api(&restore).is_err() { return Err(format!("{error}；文件已恢复，内核状态无法确认，请退出 Clash 后重试")); }
+            fs::remove_file(&journal_path).map_err(|e| e.to_string())?;
+            return Err(format!("{error}；已恢复原配置和规则"));
+        }
+        fs::remove_file(&journal_path).map_err(|e| e.to_string())?;
+    } else { atomic_write(&path, new_source.as_bytes())?; }
     let rule_count = if remove { 0 } else { paths.into_iter().collect::<std::collections::BTreeSet<_>>().len() };
-    Ok(OperationResult { message: if remove { "本工具规则已移除，请重新打开 Clash Verge".into() } else { format!("已写入 {rule_count} 条规则。请重新打开 Clash Verge，并使用规则模式；连接是否直连需在 Clash 中确认") }, rule_count })
+    Ok(OperationResult { message: if running { format!("已保存并在线应用 {rule_count} 条规则，新连接已可使用规则模式；无需退出 Clash") } else { format!("已保存 {rule_count} 条规则，下次启动 Clash 后生效") }, rule_count, pending_restart: !running })
 }
 
 #[tauri::command]
@@ -238,7 +306,7 @@ async fn inspect_integration(config_dir: String) -> Result<Integration> {
         let running = clash_running()?;
         match self::config_dir(&config_dir).and_then(|dir| script_path(&dir).map(|path| (dir, path))) {
             Ok((dir, path)) => { let (_, block) = rules::split_managed(&original_script(&path)?)?;
-                Ok(Integration { proxy_groups: proxy_groups(&dir), config_dir: dir.to_string_lossy().trim_start_matches(r"\\?\").into(), found: true, running, managed: block.is_some(), message: if running { "已检测 Clash Verge。应用规则前请从托盘完全退出".into() } else { "已连接 Clash 配置目录。规则写入后需重新打开 Clash；后续订阅脚本可能覆盖全局规则，请检查实际连接".into() } })
+                Ok(Integration { proxy_groups: proxy_groups(&dir), config_dir: dir.to_string_lossy().trim_start_matches(r"\\?\").into(), found: true, running, managed: block.is_some(), message: if running { "已连接 Clash，支持自动保存和在线应用；旧连接不会被强制断开".into() } else { "已连接 Clash 配置目录，选择会自动保存规则，下次启动 Clash 后生效".into() } })
             }
             Err(e) => Ok(Integration { config_dir, found: false, running, managed: false, message: e, proxy_groups: vec!["GLOBAL".into()] })
         }

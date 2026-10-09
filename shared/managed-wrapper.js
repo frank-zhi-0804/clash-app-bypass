@@ -23,6 +23,7 @@
       throw new Error('Clash App Bypass: invalid routing mode');
     }
     result['find-process-mode'] = 'always';
+    result.mode = 'rule';
     return result;
   };
 })();

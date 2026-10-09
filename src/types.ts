@@ -19,4 +19,4 @@ export interface Integration {
   message: string;
   proxyGroups: string[];
 }
-export interface OperationResult { message: string; ruleCount: number; }
+export interface OperationResult { message: string; ruleCount: number; pendingRestart?: boolean; }

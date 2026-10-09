@@ -4,6 +4,15 @@ $entries = @{}
 $inventory = @(Get-CimInstance Win32_Process)
 $processes = @($inventory | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.EndsWith('.exe', [StringComparison]::OrdinalIgnoreCase) })
 $processById = @{}
+$signatureCache = @{}
+function Get-VerifiedSigner([string]$path) {
+  if (-not $signatureCache.ContainsKey($path)) {
+    $thumbprint = ''
+    try { $signature = Get-AuthenticodeSignature -LiteralPath $path; if ($signature.Status -eq 'Valid' -and $signature.SignerCertificate) { $thumbprint = $signature.SignerCertificate.Thumbprint } } catch {}
+    $signatureCache[$path] = $thumbprint
+  }
+  return $signatureCache[$path]
+}
 foreach ($proc in $inventory) { if ($proc.ProcessId) { $processById[[string]$proc.ProcessId] = $proc } }
 $windowsRoot = [IO.Path]::GetFullPath($env:WINDIR).TrimEnd('\') + '\'
 function Get-ValorantPaths([string]$path) {
@@ -115,7 +124,20 @@ foreach ($entry in $entries.Values) {
       if (-not $proc.CreationDate -or -not $parent.CreationDate -or $proc.CreationDate -lt $parent.CreationDate) { continue }
       $relatedIds[$key] = $true; $added = $true
       $candidate = $proc.ExecutablePath
-      if ($candidate -and $candidate.EndsWith('.exe', [StringComparison]::OrdinalIgnoreCase) -and -not $candidate.StartsWith($windowsRoot, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $candidate -PathType Leaf) -and $entry.processes -inotcontains $candidate) { $entry.suggestedProcesses += $candidate }
+      if ($candidate -and $candidate.EndsWith('.exe', [StringComparison]::OrdinalIgnoreCase) -and -not $candidate.StartsWith($windowsRoot, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $candidate -PathType Leaf) -and $entry.processes -inotcontains $candidate) {
+        $trusted = $false
+        if ($product) {
+          try {
+            $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($candidate)
+            if ($info.ProductName -ieq $product) {
+              $signer = Get-VerifiedSigner $entry.path
+              $trusted = $signer -and $signer -eq (Get-VerifiedSigner $candidate)
+            }
+          } catch {}
+        }
+        if ($trusted) { $entry.processes += $candidate }
+        else { $entry.suggestedProcesses += $candidate }
+      }
     }
     if (-not $added) { break }
   }
