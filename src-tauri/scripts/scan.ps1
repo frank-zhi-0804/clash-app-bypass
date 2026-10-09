@@ -34,11 +34,14 @@ foreach ($entry in $entries.Values) {
   if ($genericRoots -icontains $appRoot) { $entry.warnings += '程序位于公共目录，仅关联主程序。建议选择安装目录内的程序。'; continue }
   $product = ''; try { $product = [Diagnostics.FileVersionInfo]::GetVersionInfo($entry.path).ProductName } catch {}
   $helperNames = @()
+  $helperRelativePaths = @()
   switch ([IO.Path]::GetFileName($entry.path).ToLowerInvariant()) {
     'steam.exe' { $helperNames = @('steamwebhelper.exe', 'gameoverlayui.exe', 'steamerrorreporter.exe') }
     'wechat.exe' { $helperNames = @('wechatappex.exe', 'wechatutility.exe', 'wechatplayer.exe') }
     'weixin.exe' { $helperNames = @('weixinappex.exe', 'weixinutility.exe') }
-    'qq.exe' { $helperNames = @('qqcrashreport.exe', 'qqexternal.exe') }
+    'qq.exe' { $helperNames = @('qqcrashreport.exe', 'qqexternal.exe', 'qqex.exe') }
+    # This browser has different product metadata. Match only WeGame's known subdirectory.
+    'wegame.exe' { $helperRelativePaths = @('qbblinktrial\browser.exe') }
     'cloudmusic.exe' { $helperNames = @('cloudmusic_reporter.exe', 'cloudmusic_helper.exe') }
   }
   $candidates = @($processes | Where-Object { $_.ExecutablePath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { $_.ExecutablePath })
@@ -59,6 +62,10 @@ foreach ($entry in $entries.Values) {
   }
   foreach ($candidate in @($candidates | Select-Object -Unique)) {
     $isRelated = $helperNames -icontains [IO.Path]::GetFileName($candidate)
+    if (-not $isRelated -and $candidate.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+      $relativePath = $candidate.Substring($rootPrefix.Length)
+      $isRelated = $helperRelativePaths -icontains $relativePath
+    }
     if (-not $isRelated -and $product) { try { $isRelated = [Diagnostics.FileVersionInfo]::GetVersionInfo($candidate).ProductName -ieq $product } catch {} }
     if ($isRelated) { $entry.processes += $candidate }
   }

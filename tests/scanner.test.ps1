@@ -26,6 +26,25 @@ try {
   if ($result.processes -contains $unrelatedPath) { throw 'Unrelated executable was associated' }
   if ($result.processes -contains $externalPath) { throw 'External shared helper was associated' }
   Write-Output 'PASS: application selection, known helpers, unrelated files and external helpers'
+  foreach ($case in @(
+    @{ Main = 'QQ.exe'; Helper = 'QQEX.exe'; Unrelated = 'other.exe' },
+    @{ Main = 'wegame.exe'; Helper = 'qbblinktrial\browser.exe'; Unrelated = 'Other\browser.exe' }
+  )) {
+    $caseRoot = Join-Path $testRoot ([IO.Path]::GetFileNameWithoutExtension($case.Main))
+    $caseMain = Join-Path $caseRoot $case.Main
+    $caseHelper = Join-Path $caseRoot $case.Helper
+    $caseUnrelated = Join-Path $caseRoot $case.Unrelated
+    foreach ($fixture in @($caseMain, $caseHelper, $caseUnrelated)) {
+      New-Item -ItemType Directory -Path (Split-Path -Parent $fixture) -Force | Out-Null
+      [IO.File]::WriteAllText($fixture, 'fixture, not executable')
+    }
+    $env:VERGE_DIRECT_INSPECT = $caseMain
+    $result = Invoke-Expression $scanSource | ConvertFrom-Json
+    if ($result.processes -notcontains $caseHelper) { throw "Missing application helper: $($case.Helper)" }
+    if ($result.processes -contains $caseUnrelated) { throw "Unrelated helper was associated: $($case.Unrelated)" }
+    if ($result.processes -contains $externalPath) { throw 'External helper was associated' }
+    Write-Output "PASS: $($case.Main) associates $($case.Helper) without matching unrelated executables"
+  }
 } finally {
   $env:VERGE_DIRECT_INSPECT = $oldInspect
   # Cleanup is strictly limited to the unique fixture directory created above.

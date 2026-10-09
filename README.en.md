@@ -26,6 +26,7 @@ The author has confirmed that the published v0.1.1 works on their own Windows co
 
 - Startup scanning and Clash detection handle failures independently, with initialization and scan retries.
 - Refreshing or applying removes missing helper paths. Missing main executables remain selected with instructions to re-add them.
+- Associate QQ's `QQEX.exe` and WeGame's `qbblinktrial\browser.exe`. Written bypass rules do not require the assistant to remain open.
 - Explicit saved-but-not-applied, rules-written, and restart-pending states. Theme changes do not mark routing as changed.
 - After restarting Clash, click the status-check button or rescan. These states describe configuration progress; inspect actual routes in Clash.
 
