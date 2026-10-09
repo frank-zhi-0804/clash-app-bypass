@@ -96,6 +96,25 @@ test('preflight captures actual routing settings without exposing configuration 
     assert.deepEqual(requests, ['GET', 'GET']);
   } finally { await close(server); }
 });
+test('apply refuses routing changes after preflight while allowing a stable global-to-rule transition', { skip: process.platform !== 'win32' }, async () => {
+  let writes = 0;
+  let active = { mode: 'global', 'find-process-mode': 'always', 'mixed-port': 7897 };
+  const server = liveServer((req, res) => {
+    if (req.method === 'PUT') {
+      req.resume(); req.on('end', () => { writes++; active = { ...active, mode: 'rule', 'find-process-mode': 'always' }; res.writeHead(204); res.end(); });
+    } else json(res, req.url === '/rules' ? { rules: [{ type: 'Match', payload: '', proxy: 'GLOBAL' }] } : active);
+  });
+  await listen(server);
+  const packet = { action: 'apply', controller: server.testPipe, general: { 'mixed-port': 7897 }, expectedRouting: { mode: 'global', findProcessMode: 'strict' }, payload: '{}', previousRules: ['MATCH,GLOBAL'], nextRules: ['MATCH,GLOBAL'] };
+  try {
+    await assert.rejects(runLiveApi(packet), /LIVE_CONFLICT/);
+    assert.equal(writes, 0);
+    active = { ...active, 'find-process-mode': 'strict' };
+    assert.equal(JSON.parse((await runLiveApi(packet)).trim()).verified, true);
+    assert.equal(writes, 1);
+    assert.equal(active.mode, 'rule');
+  } finally { await close(server); }
+});
 test('rollback restores routing settings when old and new rules are identical, then avoids duplicate reload', { skip: process.platform !== 'win32' }, async () => {
   const original = { mode: 'global', 'find-process-mode': 'strict', 'mixed-port': 7897, tun: { enable: false } };
   const applied = { ...original, mode: 'rule', 'find-process-mode': 'always' };

@@ -270,6 +270,7 @@ fn modify_rules(app: &tauri::AppHandle, apps: &[AppEntry], input: &str, remove: 
         let mut packet = serde_json::json!({"action":"preflight", "controller":controller, "general":general, "previousRules":previous_rules, "nextRules":next_rules, "payload":new_runtime});
         let preflight = live_api(&packet)?;
         let previous = preflight.get("previousRouting").ok_or("在线预检未返回原路由状态")?;
+        packet["expectedRouting"] = previous.clone();
         let mut restore_general = general.clone();
         restore_general["mode"] = serde_yaml::Value::String(previous.get("mode").and_then(|v| v.as_str()).ok_or("原路由模式无法核对")?.into());
         restore_general["find-process-mode"] = serde_yaml::Value::String(previous.get("findProcessMode").and_then(|v| v.as_str()).ok_or("原进程识别状态无法核对")?.into());

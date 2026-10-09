@@ -67,6 +67,9 @@ try {
     Assert-Rules $packet.previousRules
     $active = $null
     Assert-General $packet.general $false ([ref]$active)
+    if ($packet.action -eq 'apply' -and $null -ne $packet.expectedRouting) {
+      if ($active.mode -ne $packet.expectedRouting.mode -or $active.'find-process-mode' -ne $packet.expectedRouting.findProcessMode) { throw 'LIVE_CONFLICT' }
+    }
   }
   if ($packet.action -eq 'preflight') {
     @{ verified = $true; previousRouting = @{ mode = $active.mode; findProcessMode = $active.'find-process-mode' } } | ConvertTo-Json -Compress
