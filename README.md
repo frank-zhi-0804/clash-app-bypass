@@ -4,7 +4,7 @@
 
 **中文** | [English](README.en.md)
 
-面向 Windows 用户的 Clash Verge Rev 应用直连助手。选择不使用代理的软件，识别其关联进程，按完整程序路径生成直连规则。独立第三方项目，与 Clash Verge Rev 官方没有隶属关系。当前源码版本：**0.1.1**；界面目前为中文。
+面向 Windows 用户的 Clash Verge Rev 应用直连助手。选择不使用代理的软件，识别其关联进程，按完整程序路径生成直连规则。独立第三方项目，与 Clash Verge Rev 官方没有隶属关系。当前源码版本：**0.1.2**；界面目前为中文。
 
 ## 功能
 
@@ -18,9 +18,16 @@
 
 ## 下载安装
 
-在 [GitHub Actions](https://github.com/frank-zhi-0804/clash-app-bypass/actions/workflows/windows-build.yml) 中打开成功的 **Build Windows** 构建，下载 `clash-app-bypass-windows-x64` 产物（下载可能需要登录 GitHub）。解压后可使用 NSIS 安装包或便携版 `clash-app-bypass.exe`。便携版需要系统安装 WebView2 Runtime。
+前往 [GitHub Releases 下载最新版](https://github.com/frank-zhi-0804/clash-app-bypass/releases/latest)。下载文件名包含 `setup` 的 EXE 安装包，或便携版 `clash-app-bypass.exe`。便携版需要系统安装 WebView2 Runtime，`SHA256SUMS.txt` 提供文件校验值。
 
-构建产物可用性以 Actions 结果为准；源码构建成功不等于已经完成真实 Clash 连接和安装包运行验证。
+已发布的 v0.1.1 经作者在本机实际运行确认可用。当前源码的新改动可从 [GitHub Actions](https://github.com/frank-zhi-0804/clash-app-bypass/actions/workflows/windows-build.yml) 成功构建中下载 `clash-app-bypass-windows-x64` 产物；正式发布版本以 Releases 为准。
+
+## 本次优化（0.1.2）
+
+- 启动扫描与 Clash 检测分别处理失败，支持重试初始化和扫描。
+- 刷新和应用前清理失效辅助程序路径；主程序失效时保留选择并提示重新添加。
+- 显示“未应用”“规则已写入”“待重启 Clash”等状态；改变主题不会把规则标记为未应用。
+- 重启 Clash 后点击“已重启，检查状态”或重新扫描，更新状态提示。状态表示配置操作进度，实际路线可在 Clash 中查看。
 
 ## 使用
 
@@ -40,7 +47,7 @@
 - 当前仅支持 Windows。浏览器预览使用示例数据，不扫描真实软件、不修改 Clash。
 - 不保证识别全部相关进程。目录外共享服务、特殊启动器、无法读取路径的进程需要单独添加。
 - 关联扫描最大深度为 3，最多访问 2000 个目录项，不跟随 junction / symlink；不会将同目录所有 `.exe` 一律直连。
-- 软件路径变化后需重新添加；应用时发现保存路径失效会停止操作。
+- 主程序路径变化后需重新添加；失效辅助程序路径在刷新或应用前清理，仍存在的历史辅助程序路径保留。
 - 默认适配具有 `uid: Script` 的全局脚本结构；不支持的入口形式或指向配置目录外的脚本会停止操作。
 - 订阅级扩展可能覆盖全局规则或进程识别设置，请检查最终配置和实际连接。
 - 应用成功只表示脚本已写入。已有连接可能继续使用旧路线；当前需要退出并重启 Clash，没有实时刷新或后台自动更新规则。
@@ -82,7 +89,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 [Build Windows 工作流](.github/workflows/windows-build.yml) 在推送 `main`、推送 `v*` 标签或提交 PR 时运行，也支持手动触发。它执行规则、扫描器、前端和 Rust 检查，打包并上传 Windows 产物及依赖锁文件；不会自动创建 GitHub Release。
 
-真实 Clash 应用、连接路线和安装包运行仍需要在 Windows 环境手动验证。
+已发布的 v0.1.1 经作者在 Windows 本机运行验证。自动构建执行规则、扫描器、前端和 Rust 检查并生成安装包。
 
 ## 许可证
 

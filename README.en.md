@@ -4,7 +4,7 @@
 
 [中文](README.md) | **English**
 
-A Windows application bypass assistant for Clash Verge Rev. Select applications that should connect directly, inspect related processes, and generate rules matching their full executable paths. This is an independent third-party project, unaffiliated with Clash Verge Rev. Current source version: **0.1.1**. The application interface is currently in Chinese.
+A Windows application bypass assistant for Clash Verge Rev. Select applications that should connect directly, inspect related processes, and generate rules matching their full executable paths. This is an independent third-party project, unaffiliated with Clash Verge Rev. Current source version: **0.1.2**. The application interface is currently in Chinese.
 
 ## Features
 
@@ -18,9 +18,16 @@ A Windows application bypass assistant for Clash Verge Rev. Select applications 
 
 ## Download
 
-Open a successful **Build Windows** run in [GitHub Actions](https://github.com/frank-zhi-0804/clash-app-bypass/actions/workflows/windows-build.yml) and download the `clash-app-bypass-windows-x64` artifact (GitHub sign-in may be required). Extract it and use the NSIS installer or portable `clash-app-bypass.exe`. The portable executable requires WebView2 Runtime.
+Download the latest published version from [GitHub Releases](https://github.com/frank-zhi-0804/clash-app-bypass/releases/latest). Choose the EXE containing `setup` for installation, or portable `clash-app-bypass.exe`. The portable executable requires WebView2 Runtime. `SHA256SUMS.txt` contains download checksums.
 
-Artifact availability depends on the workflow result. A successful source build does not establish that the installer and real Clash connections have been tested.
+The author has confirmed that the published v0.1.1 works on their own Windows computer. Builds of newer source changes are available as `clash-app-bypass-windows-x64` artifacts from successful [GitHub Actions](https://github.com/frank-zhi-0804/clash-app-bypass/actions/workflows/windows-build.yml) runs. Releases remain the source for published versions.
+
+## Improvements in 0.1.2
+
+- Startup scanning and Clash detection handle failures independently, with initialization and scan retries.
+- Refreshing or applying removes missing helper paths. Missing main executables remain selected with instructions to re-add them.
+- Explicit saved-but-not-applied, rules-written, and restart-pending states. Theme changes do not mark routing as changed.
+- After restarting Clash, click the status-check button or rescan. These states describe configuration progress; inspect actual routes in Clash.
 
 ## Usage
 
@@ -40,7 +47,7 @@ Deselect an application and apply again to remove its direct rules. With no appl
 - Windows only. Browser preview uses sample data and cannot scan real applications or modify Clash.
 - Association does not guarantee every related process is found. Shared services outside the application directory, special launchers, and processes with unreadable paths may need manual addition.
 - Directory scanning is limited to depth 3 and 2,000 entries and does not follow junctions or symlinks. It does not bypass every `.exe` in a directory automatically.
-- Re-add applications after executable paths change. Applying stops if a saved path is invalid.
+- Re-add applications when the main executable path changes. Missing helper paths are removed before refresh or application; existing historical helper paths are retained.
 - The integration expects the global script structure with `uid: Script`. Unsupported entry points or scripts outside the configuration directory cause the operation to stop.
 - Subscription extensions can override global rules or process detection settings. Check the final configuration and actual connections.
 - Successful application means the script was written. Existing connections may keep their previous route. Exiting and restarting Clash is required; live refresh and background rule updates are not implemented.
@@ -82,7 +89,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 The [Build Windows workflow](.github/workflows/windows-build.yml) runs on pushes to `main`, `v*` tags, and pull requests, and supports manual dispatch. It checks routing rules, the scanner, frontend, and Rust backend, then packages and uploads Windows artifacts and dependency lock files. It does not automatically create a GitHub Release.
 
-Applying changes to real Clash configurations, connection routing, and installer behavior still require manual Windows validation.
+The author has run and verified the published v0.1.1 on Windows. CI checks routing, the scanner, frontend, and Rust backend and packages the installer.
 
 ## License
 

@@ -17,6 +17,9 @@ export async function saveSettings(settings: Settings) {
 }
 export async function scanApps(): Promise<AppEntry[]> { return desktop ? invoke('scan_apps') : examples; }
 export async function inspectApp(path: string): Promise<AppEntry> { return invoke('inspect_app', { path }); }
+export async function refreshSelected(apps: AppEntry[]): Promise<AppEntry[]> {
+  return desktop ? invoke('refresh_selected', { apps }) : apps;
+}
 export async function integration(configDir: string): Promise<Integration> {
   return desktop ? invoke('inspect_integration', { configDir }) : { configDir: '', found: false, running: false, managed: false, message: '浏览器演示，未连接 Clash', proxyGroups: ['GLOBAL', '示例代理组'] };
 }

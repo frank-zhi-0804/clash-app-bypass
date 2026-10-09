@@ -6,8 +6,10 @@ export interface AppEntry {
   processes: string[];
   source: string;
   warnings: string[];
+  pathMissing?: boolean;
 }
-export interface Settings { selected: AppEntry[]; configDir: string; dark: boolean; otherTraffic: 'proxy' | 'subscription'; proxyGroup: string; }
+export interface AppliedState { fingerprint: string; pendingRestart: boolean; hasRules: boolean; }
+export interface Settings { selected: AppEntry[]; configDir: string; dark: boolean; otherTraffic: 'proxy' | 'subscription'; proxyGroup: string; applied?: AppliedState | null; }
 export interface Integration {
   configDir: string;
   found: boolean;

@@ -12,14 +12,17 @@ struct OperationLock(Mutex<()>);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AppEntry { id: String, name: String, path: String, running: bool, processes: Vec<String>, source: String, warnings: Vec<String> }
+struct AppEntry { id: String, name: String, path: String, running: bool, processes: Vec<String>, source: String, warnings: Vec<String>, #[serde(default)] path_missing: bool }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Settings { #[serde(default)] selected: Vec<AppEntry>, #[serde(default)] config_dir: String, #[serde(default)] dark: bool, #[serde(default = "default_mode")] other_traffic: String, #[serde(default = "default_group")] proxy_group: String }
+struct AppliedState { fingerprint: String, pending_restart: bool, has_rules: bool }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Settings { #[serde(default)] selected: Vec<AppEntry>, #[serde(default)] config_dir: String, #[serde(default)] dark: bool, #[serde(default = "default_mode")] other_traffic: String, #[serde(default = "default_group")] proxy_group: String, #[serde(default)] applied: Option<AppliedState> }
 fn default_mode() -> String { "proxy".into() }
 fn default_group() -> String { "GLOBAL".into() }
 impl Default for Settings {
-    fn default() -> Self { Self { selected: vec![], config_dir: String::new(), dark: false, other_traffic: default_mode(), proxy_group: default_group() } }
+    fn default() -> Self { Self { selected: vec![], config_dir: String::new(), dark: false, other_traffic: default_mode(), proxy_group: default_group(), applied: None } }
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -89,6 +92,34 @@ fn scan(inspect: Option<&str>) -> Result<Vec<AppEntry>> {
     let output = powershell(include_str!("../scripts/scan.ps1"), inspect)?;
     serde_json::from_str(&output).map_err(|e| format!("无法解析扫描结果：{e}"))
 }
+
+fn reconcile_entry(previous: &AppEntry, mut live: AppEntry) -> AppEntry {
+    let removed = previous.processes.iter().filter(|path| !Path::new(path).is_file()).count();
+    let mut paths: BTreeMap<String, String> = live.processes.iter().map(|path| (path.to_lowercase(), path.clone())).collect();
+    for path in &previous.processes {
+        if Path::new(path).is_file() { paths.entry(path.to_lowercase()).or_insert_with(|| path.clone()); }
+    }
+    paths.entry(live.path.to_lowercase()).or_insert_with(|| live.path.clone());
+    live.processes = paths.into_values().collect();
+    live.name = previous.name.clone();
+    live.path_missing = false;
+    if removed > 0 { live.warnings.push(format!("已清理 {removed} 个失效的辅助程序路径，当前选择需重新应用")); }
+    live
+}
+
+fn refresh_entries(apps: Vec<AppEntry>) -> Result<Vec<AppEntry>> {
+    apps.into_iter().map(|previous| {
+        if !Path::new(&previous.path).is_file() {
+            let mut missing = previous;
+            missing.path_missing = true;
+            missing.running = false;
+            missing.warnings = vec!["主程序路径已失效。请取消选择，再添加新的程序文件".into()];
+            return Ok(missing);
+        }
+        let live = scan(Some(&previous.path))?.into_iter().next().ok_or("无法识别所选程序，请重新添加")?;
+        Ok(reconcile_entry(&previous, live))
+    }).collect()
+}
 fn clash_running() -> Result<bool> {
     let output = powershell("$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $p=@(Get-Process -Name 'clash-verge','verge-mihomo','verge-mihomo-alpha' -ErrorAction SilentlyContinue); if($p.Count -gt 0){'true'}else{'false'}", None)?;
     Ok(output.trim() == "true")
@@ -151,6 +182,9 @@ fn modify_rules(app: &tauri::AppHandle, apps: &[AppEntry], input: &str, remove: 
     }
     let block = if remove { None } else { Some(rules::make_block(&paths, mode, group)?) };
     if !remove {
+        for app in apps {
+            if !Path::new(&app.path).is_file() { return Err(format!("主程序路径已失效，请取消选择并重新添加：{}", app.path)); }
+        }
         // Revalidate every executable before generating rules; never silently apply stale paths.
         for path in &paths { if !Path::new(path).is_file() { return Err(format!("程序路径已失效，请重新扫描或取消选择：{path}")); } }
     }
@@ -180,6 +214,8 @@ async fn scan_apps() -> Result<Vec<AppEntry>> { tauri::async_runtime::spawn_bloc
 #[tauri::command]
 async fn inspect_app(path: String) -> Result<AppEntry> { tauri::async_runtime::spawn_blocking(move || scan(Some(&path))?.into_iter().next().ok_or("无法识别这个程序".into())).await.map_err(|e| e.to_string())? }
 #[tauri::command]
+async fn refresh_selected(apps: Vec<AppEntry>) -> Result<Vec<AppEntry>> { tauri::async_runtime::spawn_blocking(move || refresh_entries(apps)).await.map_err(|e| e.to_string())? }
+#[tauri::command]
 async fn inspect_integration(config_dir: String) -> Result<Integration> {
     tauri::async_runtime::spawn_blocking(move || {
         let running = clash_running()?;
@@ -207,13 +243,37 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| { if let Some(w) = app.get_webview_window("main") { let _ = w.set_focus(); } }))
         .plugin(tauri_plugin_dialog::init())
         .manage(OperationLock(Mutex::new(())))
-        .invoke_handler(tauri::generate_handler![load_settings, save_settings, scan_apps, inspect_app, inspect_integration, apply_rules, remove_rules])
+        .invoke_handler(tauri::generate_handler![load_settings, save_settings, scan_apps, inspect_app, refresh_selected, inspect_integration, apply_rules, remove_rules])
         .run(tauri::generate_context!()).expect("无法启动直连助手");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn refresh_prunes_missing_helpers_and_preserves_existing_ones() {
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("clash-app-bypass-refresh-{stamp}"));
+        fs::create_dir(&dir).unwrap();
+        let main = dir.join("main.exe"); let helper = dir.join("helper.exe"); let fresh = dir.join("fresh.exe");
+        for path in [&main, &helper, &fresh] { fs::write(path, b"fixture").unwrap(); }
+        let old = AppEntry { id: "app".into(), name: "Friendly name".into(), path: main.to_string_lossy().into(), running: false,
+            processes: vec![main.to_string_lossy().into(), helper.to_string_lossy().into(), dir.join("removed.exe").to_string_lossy().into()],
+            source: "test".into(), warnings: vec![], path_missing: false };
+        let live = AppEntry { processes: vec![main.to_string_lossy().into(), fresh.to_string_lossy().into()], name: "Filename".into(), ..old.clone() };
+        let updated = reconcile_entry(&old, live);
+        assert_eq!(updated.processes.len(), 3);
+        assert!(updated.processes.contains(&helper.to_string_lossy().into_owned()));
+        assert!(updated.processes.contains(&fresh.to_string_lossy().into_owned()));
+        assert_eq!(updated.name, "Friendly name");
+        assert!(updated.warnings.iter().any(|warning| warning.contains("1 个失效")));
+        fs::remove_file(&main).unwrap();
+        let missing = refresh_entries(vec![updated]).unwrap();
+        assert!(missing[0].path_missing);
+        assert!(!missing[0].running);
+        assert!(missing[0].warnings[0].contains("主程序路径已失效"));
+        fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn defaults_and_old_settings_use_proxy_mode() {
         let empty = Settings::default();
