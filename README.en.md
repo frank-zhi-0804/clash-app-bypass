@@ -1,0 +1,89 @@
+<p align="center"><img src="app-icon.png" width="128" alt="Clash App Bypass icon" /></p>
+
+# Clash App Bypass
+
+[中文](README.md) | **English**
+
+A Windows application bypass assistant for Clash Verge Rev. Select applications that should connect directly, inspect related processes, and generate rules matching their full executable paths. This is an independent third-party project, unaffiliated with Clash Verge Rev. Current source version: **0.1.1**. The application interface is currently in Chinese.
+
+## Features
+
+- Scan Start Menu and desktop shortcuts and running processes with readable paths; manually add `.exe` files.
+- Search applications, filter running or selected entries, and inspect related processes.
+- Associate executables in the application's directory using product metadata and a small list of known helper names.
+- Save selections locally; rescan and validate executable paths before applying changes.
+- Generate `PROCESS-PATH,...,DIRECT` rules to avoid matching unrelated executables with the same name.
+- Manage a dedicated section of the global extension script with backups, conflict detection, and undo.
+- Light and dark themes; application icons generated from the root `app-icon.png` artwork.
+
+## Download
+
+Open a successful **Build Windows** run in [GitHub Actions](https://github.com/frank-zhi-0804/clash-app-bypass/actions/workflows/windows-build.yml) and download the `clash-app-bypass-windows-x64` artifact (GitHub sign-in may be required). Extract it and use the NSIS installer or portable `clash-app-bypass.exe`. The portable executable requires WebView2 Runtime.
+
+Artifact availability depends on the workflow result. A successful source build does not establish that the installer and real Clash connections have been tested.
+
+## Usage
+
+1. Open the desktop app and wait for scanning. If automatic detection fails, select the Clash Verge Rev configuration folder containing `profiles.yaml` in Settings (`设置`).
+2. Enable “Do not use proxy” (`不使用代理`) for applications that should connect directly. Expand each entry to review associated processes.
+3. Configure “Other traffic” (`其他流量`). The default is “Use proxy” (`使用代理`) with the `GLOBAL` group. Ensure that group ultimately selects a working proxy rather than `DIRECT`.
+4. **Fully exit Clash Verge Rev from the system tray**, including its core.
+5. Click “Apply to Clash” (`应用到 Clash`), reopen Clash Verge Rev, and use **Rule mode**. Enable TUN if you need to capture applications that ignore the system proxy.
+6. Inspect new connections in Clash to confirm `DIRECT` for selected applications and the expected proxy for other traffic.
+
+The default rule order is “selected executable paths → DIRECT; remaining traffic → MATCH,selected proxy group”. This overrides subscription routing rules in the runtime configuration while preserving the subscription source and original script. “Follow subscription rules” (`遵循订阅规则`) retains subscription routing and does not guarantee that a particular website uses a proxy.
+
+Deselect an application and apply again to remove its direct rules. With no applications selected, “Use proxy” still retains the default proxy rule. “Undo this tool's rules” (`撤销本工具规则`) removes the managed section while keeping application selections.
+
+## Scope and limitations
+
+- Windows only. Browser preview uses sample data and cannot scan real applications or modify Clash.
+- Association does not guarantee every related process is found. Shared services outside the application directory, special launchers, and processes with unreadable paths may need manual addition.
+- Directory scanning is limited to depth 3 and 2,000 entries and does not follow junctions or symlinks. It does not bypass every `.exe` in a directory automatically.
+- Re-add applications after executable paths change. Applying stops if a saved path is invalid.
+- The integration expects the global script structure with `uid: Script`. Unsupported entry points or scripts outside the configuration directory cause the operation to stop.
+- Subscription extensions can override global rules or process detection settings. Check the final configuration and actual connections.
+- Successful application means the script was written. Existing connections may keep their previous route. Exiting and restarting Clash is required; live refresh and background rule updates are not implemented.
+
+## Local data, backups, and undo
+
+Tauri's `app_data_dir` (application identifier `io.clashappbypass.app`) stores `settings.json`, `ownership.json`, and `backups/`. These contain executable paths and original extension scripts. The tool does not upload them; do not commit them to a public repository.
+
+The original script is backed up before the first modification. Clash processes and source contents are checked before every write. External edits to the managed section or missing local ownership records stop modifications. Upgrades use the same data directory and management markers.
+
+If undo fails, exit Clash, locate a backup in the local data directory, and review and restore it through Clash's global extension script editor. Avoid overwriting the entire script with an old backup if other rules have changed.
+
+## Development and builds
+
+Install Node.js 22 or later. Desktop development also requires stable Rust (MSVC), Visual Studio C++ Build Tools, Windows SDK, and WebView2. See [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
+
+```powershell
+npm install
+node scripts/generate-icon.mjs
+npm run dev           # Browser preview
+npm run desktop       # Desktop development
+npm run desktop:build # Windows installer
+```
+
+Alternatively, run `start-web-preview.cmd`, `start-desktop.cmd`, or `build-windows.cmd`. These launchers install missing frontend dependencies and generate icons. Generate icons before invoking a desktop build directly. Installers are written to `src-tauri/target/release/bundle/nsis/`; the portable executable is `src-tauri/target/release/clash-app-bypass.exe`.
+
+### Icons
+
+`app-icon.png` is the source artwork. `node scripts/generate-icon.mjs` uses the local Tauri CLI to generate desktop assets in `src-tauri/icons/` and copies the 128-pixel version to `public/app-icon.png` for the sidebar and browser favicon. Run it again after replacing the source image.
+
+### Validation
+
+```powershell
+npm test
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/scanner.test.ps1
+npm run build
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+The [Build Windows workflow](.github/workflows/windows-build.yml) runs on pushes to `main`, `v*` tags, and pull requests, and supports manual dispatch. It checks routing rules, the scanner, frontend, and Rust backend, then packages and uploads Windows artifacts and dependency lock files. It does not automatically create a GitHub Release.
+
+Applying changes to real Clash configurations, connection routing, and installer behavior still require manual Windows validation.
+
+## License
+
+[MIT](LICENSE). The project code was independently written without copying source from Clash Verge Rev or other application routing tools.

@@ -1,123 +1,77 @@
+<p align="center"><img src="app-icon.png" width="128" alt="Clash App Bypass 图标" /></p>
+
 # Clash App Bypass · 直连助手
 
-## v0.1.1：只排除选中软件，其他流量继续代理
+**中文** | [English](README.en.md)
 
-默认“其他流量”为“使用代理”，代理组为 GLOBAL，沿用 Clash 全局模式选中的节点或组。请确保 GLOBAL 没有选择 DIRECT，代理组最终使用的是可用代理节点。
+面向 Windows 用户的 Clash Verge Rev 应用直连助手。选择不使用代理的软件，识别其关联进程，按完整程序路径生成直连规则。独立第三方项目，与 Clash Verge Rev 官方没有隶属关系。当前源码版本：**0.1.1**；界面目前为中文。
 
-规则顺序为：所选程序路径 → DIRECT，其余流量 → MATCH,所选代理组。此模式覆盖运行配置中的原订阅分流规则，但保留订阅原文与原脚本，撤销后恢复原有处理方式。Clash 仍需使用规则模式。
+## 功能
 
-例如：选择无畏契约“不使用代理”，其他流量选择“使用代理”、GLOBAL。应用后重新打开 Clash，游戏匹配的进程直接联网，GitHub 等其他连接走全局模式原来选择的代理路线。
+- 扫描开始菜单、桌面快捷方式和可读取路径的运行进程，也可手动添加 `.exe`。
+- 搜索、运行中筛选、已选择筛选，展开查看关联进程。
+- 根据产品信息和少量已知辅助程序名称关联同目录下的程序。
+- 软件选择保存在本机；应用前重新扫描并检查程序路径。
+- 使用 `PROCESS-PATH,...,DIRECT`，避免将其他同名程序一起直连。
+- 管理全局扩展脚本中的专属区段，提供备份、冲突检测和撤销。
+- 支持明暗主题；应用图标由项目根目录的 `app-icon.png` 生成。
 
-“遵循订阅规则”保留旧行为，不保证 GitHub 使用代理。清空软件选择时，“使用代理”仍保留默认代理规则；恢复原配置请点击“撤销本工具规则”。
+## 下载安装
 
-升级保留同一应用数据目录及管理标记，可撤销旧版规则。订阅级扩展仍可能覆盖全局规则，实际连接需在 Clash 中确认。
+在 [GitHub Actions](https://github.com/frank-zhi-0804/clash-app-bypass/actions/workflows/windows-build.yml) 中打开成功的 **Build Windows** 构建，下载 `clash-app-bypass-windows-x64` 产物（下载可能需要登录 GitHub）。解压后可使用 NSIS 安装包或便携版 `clash-app-bypass.exe`。便携版需要系统安装 WebView2 Runtime。
 
+构建产物可用性以 Actions 结果为准；源码构建成功不等于已经完成真实 Clash 连接和安装包运行验证。
 
-面向普通用户的 **Clash Verge Rev 应用直连助手**。选择不使用代理的软件，识别相关进程，并生成程序路径直连规则。
+## 使用
 
-独立第三方项目，与 Clash Verge Rev 官方没有隶属关系。
+1. 打开桌面版并等待扫描。自动检测失败时，在设置中选择包含 `profiles.yaml` 的 Clash Verge Rev 配置目录。
+2. 为需要直连的软件打开“不使用代理”，展开关联清单检查识别结果。
+3. 设置“其他流量”：默认“使用代理”，代理组为 `GLOBAL`。确保它最终选择可用代理节点，而不是 `DIRECT`。
+4. 从系统托盘**完全退出 Clash Verge Rev**，确保内核也停止。
+5. 点击“应用到 Clash”，完成后重新打开 Clash Verge Rev，并使用**规则模式**。需要接管不遵循系统代理的应用时，可启用 TUN。
+6. 在 Clash 的连接页面确认新连接是否使用 `DIRECT`，其他流量是否走预期代理。
 
-## 第一版功能
+默认规则顺序为“所选程序路径 → DIRECT，其余流量 → MATCH,所选代理组”。这会覆盖运行配置中的订阅分流规则，但保留订阅原文和原脚本。“遵循订阅规则”则保留订阅分流行为，不保证特定网站走代理。
 
-- Windows 软件扫描：开始菜单、桌面快捷方式、可读取路径的运行进程。
-- 搜索、运行中筛选、已选择筛选，手动选择 `.exe` 添加。
-- 自动关联：同产品信息的程序与少量已知软件的辅助程序，限制在程序所在目录下。
-- 选择自动保存在本机；应用前再次扫描所选程序目录。
-- `PROCESS-PATH,...,DIRECT` 规则使用完整路径，避免误匹配其他同名软件。
-- 写入 Clash Verge Rev 的全局扩展脚本，保留已有 `function main(...)` 的返回结果。
-- 规则备份、修改冲突检测、撤销本工具规则。
-- MUI 统一组件及明暗主题。
+取消某个软件的选择后再次应用，会移除其直连规则。清空选择时，“使用代理”仍保留默认代理规则；点击“撤销本工具规则”可移除本工具管理段并保留软件选择。
 
-## 当前验证状态
+## 适用范围和限制
 
-这是 v0.1.0 源码首版，尚未发布经过本机端到端验证的安装包。
+- 当前仅支持 Windows。浏览器预览使用示例数据，不扫描真实软件、不修改 Clash。
+- 不保证识别全部相关进程。目录外共享服务、特殊启动器、无法读取路径的进程需要单独添加。
+- 关联扫描最大深度为 3，最多访问 2000 个目录项，不跟随 junction / symlink；不会将同目录所有 `.exe` 一律直连。
+- 软件路径变化后需重新添加；应用时发现保存路径失效会停止操作。
+- 默认适配具有 `uid: Script` 的全局脚本结构；不支持的入口形式或指向配置目录外的脚本会停止操作。
+- 订阅级扩展可能覆盖全局规则或进程识别设置，请检查最终配置和实际连接。
+- 应用成功只表示脚本已写入。已有连接可能继续使用旧路线；当前需要退出并重启 Clash，没有实时刷新或后台自动更新规则。
 
-创作环境不能下载 npm / Rust 依赖，且不能读取用户的 Clash 配置目录。因此已完成路由脚本测试、PowerShell 扫描器语法及模拟目录测试，但 **TypeScript 构建、Rust 编译、真实 Clash 应用和安装包运行仍需验证**。源码附带 GitHub Actions 构建流程。
+## 本机数据、备份与撤销
 
-## 技术栈
+Tauri 的 `app_data_dir`（应用标识 `io.clashappbypass.app`）存放 `settings.json`、`ownership.json` 和 `backups/`。这些数据包含程序路径和原扩展脚本，本工具不会上传，请勿提交到公开仓库。
 
-React 19 + TypeScript + MUI 7 + Vite + Tauri 2 + Rust。图标统一使用 `@mui/icons-material`。
+首次改写前备份原脚本，每次写入前检查 Clash 进程和源文件内容。管理区段被外部修改或缺少本机归属记录时，会停止修改。升级沿用同一应用数据目录和管理标记。
 
-### 浏览器预览
+无法正常撤销时，退出 Clash，在本机数据目录查找修改前备份，通过 Clash 的全局扩展脚本编辑器检查并恢复。其他规则已变化时，请勿盲目覆盖整份旧脚本。
 
-安装 Node.js 22 或更高版本，双击 `start-web-preview.cmd`。首次自动下载前端依赖，然后打开界面。
+## 开发与构建
 
-浏览器预览使用示例数据，不能扫描真实进程或修改 Clash。
-
-### Windows 桌面运行
-
-需要 Node.js、Rust stable（MSVC）、Visual Studio 2022 C++ Build Tools、Windows SDK 和 WebView2 Runtime。
-
-Tauri 官方安装要求：https://v2.tauri.app/start/prerequisites/
-
-环境安装完成后双击 `start-desktop.cmd`；打包双击 `build-windows.cmd`。
-
-也可以运行：
+需要 Node.js 22 或更高版本；桌面版还需要 Rust stable（MSVC）、Visual Studio C++ Build Tools、Windows SDK 和 WebView2。详见 [Tauri 环境要求](https://v2.tauri.app/start/prerequisites/)。
 
 ```powershell
 npm install
 node scripts/generate-icon.mjs
-npm run desktop
+npm run dev           # 浏览器预览
+npm run desktop       # 桌面开发
+npm run desktop:build # Windows 安装包
 ```
 
-生成安装包：
+也可双击 `start-web-preview.cmd`、`start-desktop.cmd` 或 `build-windows.cmd`，启动脚本会安装缺失的前端依赖并生成图标。直接执行桌面构建前，请先生成图标。安装包输出到 `src-tauri/target/release/bundle/nsis/`，便携程序为 `src-tauri/target/release/clash-app-bypass.exe`。
 
-```powershell
-npm run desktop:build
-```
+### 图标
 
-安装包输出于 `src-tauri/target/release/bundle/nsis/`。便携程序是 `src-tauri/target/release/clash-app-bypass.exe`，需要系统已安装 WebView2。
+`app-icon.png` 是原始图标。`node scripts/generate-icon.mjs` 使用本地 Tauri CLI 生成 `src-tauri/icons/` 中的桌面图标，并将 128 像素版本复制到 `public/app-icon.png`，供侧栏和浏览器标签使用。替换原图后重新运行该命令即可。
 
-### GitHub 自动构建
-
-1. 创建你账号下的 `clash-app-bypass` 仓库。
-2. 将本目录作为仓库根目录推送，包括 `.github/workflows/windows-build.yml`。
-3. 在仓库 Actions 中运行 **Build Windows**，也会在推送 `main` 时自动执行。
-4. 成功后下载 `clash-app-bypass-windows-x64` 构建产物。
-
-首次构建生成依赖锁文件，并通过 `dependency-lockfiles` 产物交付。建议把锁文件加入仓库，后续将工作流中的 `npm install` 改为 `npm ci`。
-
-```powershell
-git init -b main
-git add .
-git commit -m "Initial Clash App Bypass desktop app"
-git remote add origin https://github.com/frank-zhi-0804/clash-app-bypass.git
-git push -u origin main
-```
-
-本项目尚未代你创建或推送远程仓库。不要将实际 Clash 配置、订阅、备份或个人应用清单提交到 GitHub。
-
-## 使用
-
-1. 打开桌面版，等待扫描；若自动检测失败，在设置中选择包含 `profiles.yaml` 的 Clash Verge Rev 配置目录。
-2. 选择不使用代理的软件。展开关联清单查看识别结果。
-3. 从系统托盘**完全退出 Clash Verge**，确保其内核也停止运行。
-4. 点击“应用到 Clash”。工具只修改自己的全局扩展脚本尾部区段，不改订阅原文、不改代理节点。
-5. 重新打开 Clash Verge，使用**规则模式**。需要接管不使用系统代理的应用时，在 Clash 中开启 TUN。
-6. 在 Clash 的连接页面检查新的连接是否使用 `DIRECT`。
-
-取消选择再应用，会移除对应的软件规则。清空选择时，“使用代理”保留默认代理路线；“遵循订阅规则”移除全部本工具规则。也可以点击“撤销本工具规则”，保留软件选择并移除本工具管理段。
-
-## 关联边界
-
-- 不承诺识别某个软件的全部进程。目录外共享服务、缺少路径权限的进程、便携软件位于公共目录、特殊启动器需要单独添加。
-- 扫描最大目录深度为 3，最多访问 2000 个目录项；不跟随 junction / symlink。
-- 通过文件版本 `ProductName` 与少量已知辅助程序名称判断关联，不会将同目录的所有 `.exe` 一律直连。
-- 路径变化后需要重新添加；保存的旧路径在应用时会检查，失效则停止应用。
-- 应用成功表示脚本已写入；不会伪称连接验证成功。已建立的连接可能继续使用原路线。
-- 默认适配具有 `uid: Script` 的全局脚本结构；手写其他入口形式、脚本指向配置目录外等情况会停止操作。
-- 全局脚本后还有订阅级扩展，订阅脚本可能覆盖规则或进程识别设置。请以最终配置与实际连接为准。
-- 第一版修改规则需要退出并重启 Clash，没有实现实时刷新或后台自动更新规则。
-
-## 数据和备份
-
-应用数据通过 Tauri `app_data_dir` 保存在本机的 `io.clashappbypass.app` 数据目录，包含 `settings.json`、`ownership.json` 和 `backups/`。
-
-本机记录和备份包含程序路径及原扩展脚本，不上传，也不要公开。首次改写前备份原脚本，每次写入前再次检查 Clash 进程和源文件内容。规则区段若被外部修改或缺少本机归属记录，工具会停止修改。
-
-若不能正常撤销：退出 Clash，在本机应用数据目录找到修改前备份，通过 Clash 的全局扩展脚本编辑器检查并恢复。不要在其他规则发生变化后盲目恢复整份旧脚本。
-
-## 验证
+### 验证
 
 ```powershell
 npm test
@@ -126,8 +80,10 @@ npm run build
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-## 后续计划
+[Build Windows 工作流](.github/workflows/windows-build.yml) 在推送 `main`、推送 `v*` 标签或提交 PR 时运行，也支持手动触发。它执行规则、扫描器、前端和 Rust 检查，打包并上传 Windows 产物及依赖锁文件；不会自动创建 GitHub Release。
 
-真实连接验证、更多软件关联清单、软件图标提取、配置刷新机制和更完整的端到端测试。
+真实 Clash 应用、连接路线和安装包运行仍需要在 Windows 环境手动验证。
 
-项目代码原创编写，未复制 Clash Verge Rev 或其他应用分流工具的源码。采用 MIT 开源许可证，见 LICENSE。
+## 许可证
+
+采用 [MIT 许可证](LICENSE)。项目代码独立编写，未复制 Clash Verge Rev 或其他应用分流工具的源码。

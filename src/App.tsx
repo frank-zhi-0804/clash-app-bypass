@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, Avatar, Box, Button, Chip, CircularProgress, Collapse, CssBaseline, Dialog, DialogActions, DialogContent, DialogTitle, Divider, IconButton, InputAdornment, List, ListItemButton, ListItemIcon, ListItemText, MenuItem, Paper, Snackbar, Stack, Switch, Tab, Tabs, TextField, ThemeProvider, Tooltip, Typography } from '@mui/material';
-import { Apps, Add, ArrowOutward, ChevronRight, DarkMode, FolderOpen, LightMode, Refresh, Search, Settings as SettingsIcon, Undo, ExpandMore } from '@mui/icons-material';
+import { Apps, Add, ChevronRight, DarkMode, FolderOpen, LightMode, Refresh, Search, Settings as SettingsIcon, Undo, ExpandMore } from '@mui/icons-material';
 import { open } from '@tauri-apps/plugin-dialog';
 import * as api from './api';
 import type { AppEntry, Integration, Settings } from './types';
@@ -62,7 +62,7 @@ export default function App() {
   } catch(e) { setError(String(e)); } finally { setBusy(''); } }
   return <ThemeProvider theme={theme}><CssBaseline/><Box sx={{ display: 'flex', minHeight: '100vh' }}>
     <Paper square sx={{ width: 205, flexShrink: 0, borderRight: 1, borderColor: 'divider', bgcolor: settings.dark ? '#1e202a' : '#eef0f7', p: 2.5, display: { xs: 'none', md: 'flex' }, flexDirection: 'column' }}>
-      <Stack direction="row" spacing={1.2} alignItems="center" sx={{ mb: 5 }}><Avatar variant="rounded" sx={{ bgcolor: 'primary.main', width: 36, height: 36 }}><ArrowOutward/></Avatar><Typography fontWeight={700} fontSize={19}>直连助手</Typography></Stack>
+      <Stack direction="row" spacing={1.2} alignItems="center" sx={{ mb: 5 }}><Box component="img" src="/app-icon.png" alt="直连助手图标" sx={{ width: 36, height: 36, objectFit: 'contain' }}/><Typography fontWeight={700} fontSize={19}>直连助手</Typography></Stack>
       <List disablePadding>{[['apps', '应用分流'], ['settings', '设置']].map(([id, label]) => <ListItemButton key={id} selected={page === id} onClick={() => setPage(id)} sx={{ borderRadius: 2, mb: 1 }}><ListItemIcon sx={{ minWidth: 34 }}>{id === 'apps' ? <Apps/> : <SettingsIcon/>}</ListItemIcon><ListItemText primary={label}/></ListItemButton>)}</List>
       <Box sx={{ mt: 'auto', pt: 4 }}><Typography variant="caption" color="text.secondary">Clash App Bypass · v0.1.1<br/>Clash Verge Rev 第三方助手</Typography></Box>
     </Paper>
