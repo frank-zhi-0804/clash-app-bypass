@@ -16,7 +16,7 @@ function Get-ValorantPaths([string]$path) {
         if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
         $cursor = $candidate; $linked = $false
         while ($cursor) {
-          if (((Get-Item -LiteralPath $cursor).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { $linked = $true; break }
+          if (((Get-Item -LiteralPath $cursor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { $linked = $true; break }
           $cursor = [IO.Path]::GetDirectoryName($cursor)
         }
         if (-not $linked) { $safe += $candidate }
