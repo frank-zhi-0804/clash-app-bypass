@@ -16,8 +16,22 @@ export function resumeAfterRoutingChange(previous: Settings, next: Settings): Se
     ? { ...next, applied: null } : next;
 }
 
-export function applicationStatus(settings: Settings, integration?: Integration, desktop = true) {
+export function settingsAfterConnection(settings: Settings, detected: Integration, draftDir: string, previous?: Integration): Settings {
+  const normalize = (path: string) => path.replaceAll('/', '\\').toLowerCase();
+  const configDir = draftDir.trim() ? detected.configDir : '';
+  const sameLocation = normalize(settings.configDir) === normalize(configDir) || (previous?.found && normalize(previous.configDir) === normalize(detected.configDir));
+  const next = { ...settings, configDir, applied: sameLocation || settings.applied?.hasRules === false ? settings.applied : null };
+  // A reconnect must never mark previously edited, unwritten selections as applied.
+  if (sameLocation && next.applied?.fingerprint === routingFingerprint(settings)) {
+    next.applied = { ...next.applied, fingerprint: routingFingerprint(next) };
+  }
+  return next;
+}
+
+export function applicationStatus(settings: Settings, integration?: Integration, desktop = true, checking = false, writesPaused = false) {
   if (!desktop) return { label: '浏览器演示', message: '选择会自动保存；应用操作仅模拟，不修改 Clash。' };
+  if (checking && !integration) return { label: '正在自动连接', message: '正在读取已保存的 Clash 配置，无需重新选择目录。' };
+  if (writesPaused) return { label: '自动写入已暂停', message: '连接检查会继续；处理提示后重试，或修改分流选择以恢复自动应用。' };
   const applied = settings.applied;
   const dirty = !applied || applied.fingerprint !== routingFingerprint(settings);
   if (applied?.pendingRestart) {
@@ -31,8 +45,15 @@ export function applicationStatus(settings: Settings, integration?: Integration,
 }
 
 // Keep successful results when another startup task fails, and permit retrying all tasks.
-export async function readWorkspace(load: () => Promise<Settings>, scan: () => Promise<AppEntry[]>, inspect: (settings: Settings) => Promise<Integration>) {
+export async function readWorkspace(load: () => Promise<Settings>, scan: () => Promise<AppEntry[]>, inspect: (settings: Settings) => Promise<Integration>, onIntegration?: (result: PromiseSettledResult<Integration>) => void) {
   const settings = await load();
-  const [apps, integration] = await Promise.allSettled([scan(), inspect(settings)]);
+  const detection = Promise.resolve().then(() => inspect(settings)).then(value => {
+    onIntegration?.({ status: 'fulfilled', value });
+    return value;
+  }, reason => {
+    onIntegration?.({ status: 'rejected', reason });
+    throw reason;
+  });
+  const [apps, integration] = await Promise.allSettled([Promise.resolve().then(scan), detection]);
   return { settings, apps, integration };
 }

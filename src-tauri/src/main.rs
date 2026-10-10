@@ -174,6 +174,20 @@ fn config_dir(input: &str) -> Result<PathBuf> {
     if !dir.is_absolute() || !dir.join("profiles.yaml").is_file() { return Err("未找到 profiles.yaml，请在设置中选择 Clash Verge Rev 配置目录".into()); }
     fs::canonicalize(&dir).map_err(|e| format!("无法访问 Clash 配置目录：{e}"))
 }
+fn display_config_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        // Removing the extended UNC prefix must retain the leading network root.
+        if rest.get(..4).map(|prefix| prefix.eq_ignore_ascii_case(r"UNC\")).unwrap_or(false) {
+            return format!(r"\\{}", &rest[4..]);
+        }
+        let bytes = rest.as_bytes();
+        if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'\\' | b'/') {
+            return rest.into();
+        }
+    }
+    text.into_owned()
+}
 fn script_path(dir: &Path) -> Result<PathBuf> {
     let profiles: serde_yaml::Value = serde_yaml::from_slice(&fs::read(dir.join("profiles.yaml")).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     let items = profiles.get("items").and_then(|v| v.as_sequence()).ok_or("profiles.yaml 没有有效的 items 清单")?;
@@ -334,7 +348,7 @@ async fn inspect_integration(config_dir: String) -> Result<Integration> {
         let running = clash_running()?;
         match self::config_dir(&config_dir).and_then(|dir| script_path(&dir).map(|path| (dir, path))) {
             Ok((dir, path)) => { let (_, block) = rules::split_managed(&original_script(&path)?)?;
-                Ok(Integration { proxy_groups: proxy_groups(&dir), config_dir: dir.to_string_lossy().trim_start_matches(r"\\?\").into(), found: true, running, managed: block.is_some(), message: if running { "已连接 Clash，支持自动保存和在线应用；旧连接不会被强制断开".into() } else { "已连接 Clash 配置目录，选择会自动保存规则，下次启动 Clash 后生效".into() } })
+                Ok(Integration { proxy_groups: proxy_groups(&dir), config_dir: display_config_path(&dir), found: true, running, managed: block.is_some(), message: if running { "已连接 Clash，支持自动保存和在线应用；旧连接不会被强制断开".into() } else { "已连接 Clash 配置目录，选择会自动保存规则，下次启动 Clash 后生效".into() } })
             }
             Err(e) => Ok(Integration { config_dir, found: false, running, managed: false, message: e, proxy_groups: vec!["GLOBAL".into()] })
         }
@@ -369,6 +383,20 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn displayed_config_paths_preserve_absolute_windows_roots() {
+        for (source, expected) in [
+            (r"\\?\C:\Users\name\配置", r"C:\Users\name\配置"),
+            (r"\\?\UNC\server\share\配置", r"\\server\share\配置"),
+            (r"\\?\unc\server\share", r"\\server\share"),
+            (r"\\server\share\配置", r"\\server\share\配置"),
+            (r"C:\Users\name\配置", r"C:\Users\name\配置"),
+            (r"\\?\Volume{0123}\配置", r"\\?\Volume{0123}\配置"),
+            (r"\\?\配置", r"\\?\配置"),
+        ] {
+            assert_eq!(display_config_path(Path::new(source)), expected);
+        }
+    }
     #[test]
     fn refresh_prunes_missing_helpers_and_preserves_existing_ones() {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();

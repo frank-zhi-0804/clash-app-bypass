@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { synchronize, ROUTING_REVISION } from '../src/automation.ts';
-import { routingFingerprint } from '../src/workflow.ts';
+import { synchronize, SynchronizationFailure, readRetryDelay, ROUTING_REVISION } from '../src/automation.ts';
+import { routingFingerprint, settingsAfterConnection } from '../src/workflow.ts';
 const path = 'C:\\Apps\\app.exe';
 const base = { selected: [{ id: 'app', name: 'App', path, processes: [path], warnings: [], running: false, source: 'test' }], configDir: '', dark: false, otherTraffic: 'proxy', proxyGroup: 'GLOBAL' };
 function fixtures(options = {}) {
@@ -90,4 +90,92 @@ test('pending written rules clear after loaded-rule verification without another
   const f = fixtures({ running: true, rules: [path] });
   assert.equal((await synchronize(written, f.api)).settings.applied.pendingRestart, false);
   assert.deepEqual(f.calls, ['save']);
+});
+
+test('temporary diagnostics retain the detected integration and recover without writing', async () => {
+  const f = fixtures({ running: true, rules: [path] });
+  const healthy = { ...base, applied: { revision: ROUTING_REVISION, fingerprint: routingFingerprint(base), hasRules: true, pendingRestart: false } };
+  let reads = 0; let detected;
+  const diagnose = f.api.diagnose;
+  f.api.diagnose = async () => { if (++reads === 1) throw Error('temporary pipe failure'); return diagnose(); };
+  await assert.rejects(synchronize(healthy, f.api, { onIntegration: value => { detected = value; } }), error => {
+    assert.ok(error instanceof SynchronizationFailure);
+    assert.equal(error.phase, 'diagnose'); assert.equal(error.pausesWrites, false);
+    assert.equal(error.integration, detected); assert.equal(detected.found, true);
+    return true;
+  });
+  const recovered = await synchronize(healthy, f.api);
+  assert.equal(recovered.integration.found, true);
+  assert.equal(recovered.diagnosticError, '');
+  assert.deepEqual(f.calls, []);
+});
+
+test('a write conflict stops writes while subsequent checks and helper discovery continue', async () => {
+  const f = fixtures({ running: true, fail: true });
+  await assert.rejects(synchronize(base, f.api), error => error.phase === 'apply' && error.pausesWrites);
+  f.api.refresh = async apps => apps.map(app => ({ ...app, processes: [app.path, 'C:\\Apps\\new-helper.exe'] }));
+  let reads = 0; const diagnose = f.api.diagnose;
+  f.api.diagnose = async () => { ++reads; return diagnose(); };
+  for (let i = 0; i < 3; i++) await synchronize(base, f.api, { allowWrites: false });
+  assert.equal(reads, 3);
+  assert.deepEqual(f.calls, ['apply']);
+});
+
+test('a save failure preserves the completed application and retry saves without applying again', async () => {
+  const f = fixtures({ running: true });
+  const save = f.api.save; let attempts = 0; let completed;
+  f.api.save = async settings => { if (++attempts === 1) throw Error('settings unavailable'); return save(settings); };
+  await assert.rejects(synchronize(base, f.api), error => {
+    assert.equal(error.phase, 'save'); assert.equal(error.pausesWrites, true);
+    assert.equal(error.ruleWriteCompleted, true);
+    completed = error.settings; assert.equal(completed.applied.hasRules, true);
+    return true;
+  });
+  await synchronize(completed, f.api, { allowWrites: false });
+  await synchronize(completed, f.api, { forceSave: true });
+  assert.deepEqual(f.calls, ['apply', 'save']);
+});
+
+test('resolved directories preserve the empty automatic-detection setting and undo', async () => {
+  const f = fixtures({ running: true });
+  f.api.integration = async () => ({ found: true, running: true, managed: false, configDir: 'C:\\Users\\Local\\Clash' });
+  const undone = { ...base, applied: { revision: 1, fingerprint: routingFingerprint(base), hasRules: false, pendingRestart: false } };
+  const result = await synchronize(undone, f.api);
+  assert.equal(result.settings.configDir, '');
+  assert.equal(result.integration.configDir, 'C:\\Users\\Local\\Clash');
+  assert.equal(result.settings.applied.hasRules, false);
+  assert.deepEqual(f.calls, []);
+});
+
+test('missing selected paths do not prevent health reads once writes are paused', async () => {
+  const f = fixtures({ running: true }); let reads = 0;
+  f.api.refresh = async apps => apps.map(app => ({ ...app, pathMissing: true }));
+  const diagnose = f.api.diagnose; f.api.diagnose = async () => { ++reads; return diagnose(); };
+  await assert.rejects(synchronize(base, f.api), error => error.phase === 'selection' && error.pausesWrites);
+  await synchronize(base, f.api, { allowWrites: false });
+  assert.equal(reads, 2); assert.deepEqual(f.calls, []);
+});
+
+test('read retries back off promptly and remain bounded at thirty seconds', () => {
+  assert.deepEqual([1, 2, 3, 4, 5, 50].map(readRetryDelay), [2000, 5000, 10000, 30000, 30000, 30000]);
+});
+
+test('offline reconnect does not lose a pending selection change', async () => {
+  const f = fixtures({ running: false });
+  const written = { ...base, applied: { revision: ROUTING_REVISION, fingerprint: routingFingerprint(base), hasRules: true, pendingRestart: false } };
+  const edited = { ...written, selected: [{ ...base.selected[0], processes: [path, 'C:\\Apps\\new-helper.exe'] }] };
+  const detected = { found: true, running: false, managed: true, configDir: 'C:\\Clash', proxyGroups: [] };
+  const reconnected = settingsAfterConnection(edited, detected, 'C:\\Clash', detected);
+  const result = await synchronize(reconnected, f.api);
+  assert.deepEqual(f.calls, ['apply', 'save']);
+  assert.equal(result.settings.applied.pendingRestart, true);
+});
+
+test('metadata save failures do not claim a rule write completed', async () => {
+  const f = fixtures({ running: true, rules: [path] });
+  const healthy = { ...base, applied: { revision: ROUTING_REVISION, fingerprint: routingFingerprint(base), hasRules: true, pendingRestart: false } };
+  f.api.refresh = async apps => apps.map(app => ({ ...app, name: 'Updated display name' }));
+  f.api.save = async () => { throw Error('settings unavailable'); };
+  await assert.rejects(synchronize(healthy, f.api), error => error.phase === 'save' && error.ruleWriteCompleted === false);
+  assert.deepEqual(f.calls, []);
 });

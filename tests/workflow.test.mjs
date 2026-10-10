@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applicationStatus, readWorkspace, resumeAfterRoutingChange, routingFingerprint } from '../src/workflow.ts';
+import { applicationStatus, readWorkspace, resumeAfterRoutingChange, routingFingerprint, settingsAfterConnection } from '../src/workflow.ts';
 
 const app = { id: 'steam', name: 'Steam', path: 'C:\\Steam\\steam.exe', processes: ['C:\\Steam\\steam.exe', 'C:\\Steam\\helper.exe'], running: false, source: 'test', warnings: [] };
 const settings = { selected: [app], configDir: 'C:\\Clash', dark: false, otherTraffic: 'proxy', proxyGroup: 'GLOBAL' };
@@ -62,4 +62,36 @@ test('only a user routing change resumes automatic application after undo', () =
   assert.equal(resumeAfterRoutingChange(undone, selectionChange).applied, null);
   const fallbackChange = { ...undone, otherTraffic: 'subscription' };
   assert.equal(resumeAfterRoutingChange(undone, fallbackChange).applied, null);
+});
+
+test('integration is published before a slow software scan finishes', async () => {
+  let finishScan; let connected; let finished = false;
+  const scanPending = new Promise(resolve => { finishScan = resolve; });
+  const detected = new Promise(resolve => { connected = resolve; });
+  const workspace = readWorkspace(async () => settings, () => scanPending, async () => integration, connected).then(result => { finished = true; return result; });
+  const early = await detected;
+  assert.equal(early.status, 'fulfilled'); assert.equal(early.value, integration);
+  assert.equal(finished, false);
+  finishScan([app]);
+  assert.equal((await workspace).apps.status, 'fulfilled');
+});
+
+test('connection discovery and write suspension have distinct status messages', () => {
+  assert.equal(applicationStatus(settings, undefined, true, true).label, '正在自动连接');
+  assert.equal(applicationStatus(settings, integration, true, false, true).label, '自动写入已暂停');
+  assert.equal(applicationStatus(settings, { ...integration, managed: false }, true, false).label, '未应用');
+});
+
+test('reconnecting keeps automatic directories empty, undo intact, and dirty selections dirty', () => {
+  const automatic = { ...settings, configDir: '' };
+  const written = { ...automatic, applied: { fingerprint: routingFingerprint(automatic), hasRules: true, pendingRestart: false } };
+  const reconnected = settingsAfterConnection(written, integration, '', integration);
+  assert.equal(reconnected.configDir, '');
+  assert.equal(reconnected.applied.fingerprint, routingFingerprint(written));
+  const edited = { ...written, selected: [{ ...app, processes: [...app.processes, 'C:\\Steam\\new.exe'] }] };
+  const changedRepresentation = settingsAfterConnection(edited, integration, integration.configDir, integration);
+  assert.equal(changedRepresentation.applied.fingerprint, written.applied.fingerprint);
+  assert.notEqual(changedRepresentation.applied.fingerprint, routingFingerprint(changedRepresentation));
+  const undone = { ...written, applied: { ...written.applied, hasRules: false } };
+  assert.equal(settingsAfterConnection(undone, integration, '', integration).applied.hasRules, false);
 });

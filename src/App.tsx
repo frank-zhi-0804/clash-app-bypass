@@ -5,19 +5,24 @@ import { open } from '@tauri-apps/plugin-dialog';
 import * as api from './api';
 import type { AppEntry, Integration, Settings } from './types';
 import { makeTheme } from './theme';
-import { synchronize, ROUTING_REVISION } from './automation';
-import { applicationStatus, readWorkspace, resumeAfterRoutingChange, routingFingerprint } from './workflow';
+import { readRetryDelay, synchronize, SynchronizationFailure, ROUTING_REVISION } from './automation';
+import { applicationStatus, readWorkspace, resumeAfterRoutingChange, routingFingerprint, settingsAfterConnection } from './workflow';
 import { diagnoseApp } from './routingDiagnostics';
 import type { RoutingSnapshot } from './routingDiagnostics';
 
 export default function App() {
   const operation = useRef(false);
   const failedAutomatic = useRef('');
+  const readFailures = useRef(0);
+  const pendingSettingsSave = useRef(false);
   const [automaticError, setAutomaticError] = useState('');
+  const [writeError, setWriteError] = useState('');
   const [automaticBusy, setAutomaticBusy] = useState(false);
   const [settings, setSettings] = useState<Settings>({ selected: [], configDir: '', dark: false, otherTraffic: 'proxy', proxyGroup: 'GLOBAL' });
   const [apps, setApps] = useState<AppEntry[]>([]);
   const [connection, setConnection] = useState<Integration>();
+  const [connectionChecking, setConnectionChecking] = useState(api.desktop);
+  const [connectionError, setConnectionError] = useState('');
   const [busy, setBusy] = useState('正在读取软件清单…');
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
@@ -32,7 +37,7 @@ export default function App() {
   const [diagnosticError, setDiagnosticError] = useState('');
   const [draftDir, setDraftDir] = useState('');
   const theme = useMemo(() => makeTheme(settings.dark), [settings.dark]);
-  const status = applicationStatus(settings, connection, api.desktop);
+  const status = applicationStatus(settings, connection, api.desktop, connectionChecking, !!writeError);
   const blocked = !!busy || automaticBusy;
   const selected = useMemo(() => new Map(settings.selected.map(a => [a.id, a])), [settings.selected]);
   const combined = useMemo(() => {
@@ -46,24 +51,36 @@ export default function App() {
   const filtered = combined.filter(a => (tab !== 1 || a.running) && (tab !== 2 || selected.has(a.id)) && `${a.name} ${a.path} ${a.processes.join(' ')}`.toLowerCase().includes(query.toLowerCase()));
   const count = new Set(settings.selected.flatMap(a => a.processes)).size;
   async function initialize(isActive = () => true) {
-    setBusy('正在读取软件清单…'); setError('');
+    setBusy('正在读取软件清单…'); setError(''); setConnectionChecking(api.desktop); setConnectionError('');
     try {
-      const workspace = await readWorkspace(api.loadSettings, api.scanApps, stored => api.integration(stored.configDir));
+      const stored = await api.loadSettings();
+      if (!isActive()) return;
+      setSettings(stored); setDraftDir(stored.configDir);
+      const workspace = await readWorkspace(() => Promise.resolve(stored), api.scanApps, stored => api.integration(stored.configDir), detected => {
+        if (!isActive()) return;
+        setConnectionChecking(false);
+        if (detected.status === 'fulfilled') { setConnection(detected.value); setConnectionError(''); }
+        else setConnectionError(`Clash 检测暂时失败：${String(detected.reason)}`);
+      });
       if (!isActive()) return;
       let next = workspace.settings;
       const errors: string[] = [];
       try { next = { ...next, selected: await api.refreshSelected(next.selected) }; }
-      catch (e) { errors.push(`所选软件刷新失败：${String(e)}`); }
+      catch (e) { setAutomaticError(`所选软件刷新暂时失败：${String(e)}`); }
+      if (!isActive()) return;
       if (workspace.apps.status === 'fulfilled') setApps(workspace.apps.value);
       else errors.push(`软件扫描失败：${String(workspace.apps.reason)}`);
       if (workspace.integration.status === 'fulfilled') {
         setConnection(workspace.integration.value);
-      } else errors.push(`Clash 检测失败：${String(workspace.integration.reason)}`);
+      }
       setSettings(next); setDraftDir(next.configDir); setReady(true);
       if (errors.length) setError(errors.join('；'));
-      if (next !== workspace.settings) await api.saveSettings(next);
+      if (JSON.stringify(next) !== JSON.stringify(workspace.settings)) {
+        try { await api.saveSettings(next); }
+        catch (e) { failedAutomatic.current = routingFingerprint(next); pendingSettingsSave.current = true; setWriteError(`选择状态保存失败：${String(e)}`); }
+      }
     } catch (e) { if (isActive()) setError(String(e)); }
-    finally { if (isActive()) setBusy(''); }
+    finally { if (isActive()) { setBusy(''); setConnectionChecking(false); } }
   }
   useEffect(() => { let active = true; void initialize(() => active); return () => { active = false; }; }, []);
   useEffect(() => {
@@ -73,24 +90,43 @@ export default function App() {
     const fingerprint = routingFingerprint(settings);
     async function cycle() {
       if (!active) return;
-      if (operation.current || busy || confirm || failedAutomatic.current === fingerprint) { timer = setTimeout(cycle, 30000); return; }
+      if (operation.current || busy || confirm) { timer = setTimeout(cycle, 30000); return; }
       operation.current = true; setAutomaticBusy(true);
+      let delay = 30000;
       try {
-        const result = await synchronize(settings, { refresh: api.refreshSelected, integration: api.integration, diagnose: api.diagnoseRouting, apply: api.applyRules, save: api.saveSettings });
+        const writesAllowed = !failedAutomatic.current;
+        const result = await synchronize(settings, { refresh: api.refreshSelected, integration: api.integration, diagnose: api.diagnoseRouting, apply: api.applyRules, save: api.saveSettings }, {
+          allowWrites: writesAllowed, forceSave: writesAllowed && pendingSettingsSave.current,
+          onIntegration: integration => { if (active) { setConnection(integration); setConnectionChecking(false); setConnectionError(''); } },
+        });
         if (!active) return;
-        setAutomaticError(''); setDiagnosticError(result.diagnosticError); setSettings(old => JSON.stringify(old) === JSON.stringify(result.settings) ? old : result.settings); setConnection(result.integration); setDiagnostics(result.diagnostics);
+        readFailures.current = 0;
+        if (writesAllowed) pendingSettingsSave.current = false;
+        setAutomaticError(''); setDiagnosticError(result.diagnosticError);
+        if (writesAllowed) setSettings(old => JSON.stringify(old) === JSON.stringify(result.settings) ? old : result.settings);
+        setConnection(result.integration); setDiagnostics(result.diagnostics);
         if (result.message) setResult(result.message);
-      } catch (e) { if (active) { failedAutomatic.current = fingerprint; setAutomaticError(String(e)); setDiagnostics(undefined); } }
-      finally { operation.current = false; if (active) { setAutomaticBusy(false); timer = setTimeout(cycle, 30000); } }
+      } catch (e) { if (active) {
+        setDiagnostics(undefined);
+        if (e instanceof SynchronizationFailure && e.integration) { setConnection(e.integration); setConnectionChecking(false); setConnectionError(''); }
+        if (e instanceof SynchronizationFailure && !e.pausesWrites) {
+          delay = readRetryDelay(++readFailures.current); setAutomaticError(e.message);
+        } else {
+          failedAutomatic.current = fingerprint; setWriteError(e instanceof Error ? e.message : String(e));
+          if (e instanceof SynchronizationFailure && e.phase === 'save' && e.settings) { pendingSettingsSave.current = true; setSettings(e.settings); setResult(`${e.ruleWriteCompleted ? '规则操作已完成，但' : ''}状态保存失败；自动写入已暂停。`); }
+        }
+      } }
+      finally { operation.current = false; if (active) { setAutomaticBusy(false); timer = setTimeout(cycle, delay); } }
     }
     timer = setTimeout(cycle, 700);
     return () => { active = false; clearTimeout(timer); setAutomaticBusy(false); };
   }, [ready, settings, busy, confirm]);
   async function persist(next: Settings) { if (operation.current) return; operation.current = true; next = resumeAfterRoutingChange(settings, next); setBusy('正在保存选择…'); setError(''); try {
     await api.saveSettings(next); setSettings(next);
+    pendingSettingsSave.current = false;
     if (routingFingerprint(next) !== routingFingerprint(settings)) setDiagnostics(undefined);
-    if (routingFingerprint(next) !== routingFingerprint(settings)) { failedAutomatic.current = ''; setAutomaticError(''); setResult('选择已保存，正在自动应用…'); }
-  } catch (e) { setError(String(e)); } finally { operation.current = false; setBusy(''); } }
+    if (routingFingerprint(next) !== routingFingerprint(settings)) { failedAutomatic.current = ''; setWriteError(''); setAutomaticError(''); readFailures.current = 0; setResult('选择已保存，正在自动应用…'); }
+  } catch (e) { failedAutomatic.current = routingFingerprint(next); pendingSettingsSave.current = true; setSettings(next); setWriteError(`选择状态保存失败：${String(e)}`); } finally { operation.current = false; setBusy(''); } }
   async function refresh() {
     if (!ready) { await initialize(); return; }
     if (operation.current) return;
@@ -104,14 +140,15 @@ export default function App() {
       let next = settings;
       if (workspace.integration.status === 'fulfilled') {
         setConnection(workspace.integration.value);
-      } else errors.push(`Clash 检测失败：${String(workspace.integration.reason)}`);
+        setConnectionError('');
+      } else setConnectionError(`Clash 检测暂时失败：${String(workspace.integration.reason)}`);
       try { next = { ...next, selected: await api.refreshSelected(next.selected) }; }
       catch (e) { errors.push(`所选软件刷新失败：${String(e)}`); }
       await api.saveSettings(next); setSettings(next);
-      failedAutomatic.current = ''; setAutomaticError('');
+      setAutomaticError(''); pendingSettingsSave.current = false; readFailures.current = 0;
       setResult(routingFingerprint(next) !== routingFingerprint(settings) ? (next.applied?.hasRules === false ? '已更新关联程序，自动应用保持暂停' : '已更新关联程序，正在自动应用…') : '已刷新软件清单与 Clash 状态');
       if (errors.length) setError(errors.join('；')); else setToast('扫描完成，已检查所选软件及辅助程序路径');
-    } catch (e) { setError(String(e)); } finally { operation.current = false; setBusy(''); }
+    } catch (e) { failedAutomatic.current = routingFingerprint(settings); pendingSettingsSave.current = true; setWriteError(`选择状态保存失败：${String(e)}`); } finally { operation.current = false; setBusy(''); }
   }
   async function checkConnections() {
     if (operation.current) return;
@@ -132,7 +169,20 @@ export default function App() {
       setBusy('正在识别软件…'); const entry = await api.inspectApp(path); setApps(old => [...old.filter(a => a.id !== entry.id), entry]); setToast('已添加软件，打开“不使用代理”开关即可选择');
     } catch (e) { setError(String(e)); } finally { operation.current = false; setBusy(''); } }
   async function chooseDir() { if (operation.current) return; operation.current = true; setBusy('正在选择配置目录…'); try { const dir = await open({ directory: true, multiple: false }); if (typeof dir === 'string') setDraftDir(dir); } catch(e) { setError(String(e)); } finally { operation.current = false; setBusy(''); } }
-  async function saveDir() { if (operation.current) return; operation.current = true; setDiagnostics(undefined); setBusy('正在检测 Clash…'); setError(''); try { const status = await api.integration(draftDir); if (!status.found) throw new Error(status.message); const changed = settings.configDir.toLowerCase() !== status.configDir.toLowerCase(); const next = { ...settings, configDir: status.configDir, applied: changed ? null : settings.applied }; await api.saveSettings(next); setSettings(next); setDraftDir(status.configDir); setConnection(status); failedAutomatic.current = ''; setAutomaticError(''); setToast('Clash 配置目录已连接'); } catch(e) { setError(String(e)); } finally { operation.current = false; setBusy(''); } }
+  async function saveDir() {
+    if (operation.current) return;
+    operation.current = true; setDiagnostics(undefined); setBusy('正在检测 Clash…'); setError('');
+    let next: Settings | undefined;
+    try {
+      const status = await api.integration(draftDir);
+      if (!status.found) throw new Error(status.message);
+      next = settingsAfterConnection(settings, status, draftDir, connection);
+      await api.saveSettings(next); setSettings(next); setDraftDir(next.configDir); setConnection(status); setConnectionChecking(false); setConnectionError(''); setAutomaticError(''); pendingSettingsSave.current = false; readFailures.current = 0; setToast('Clash 配置目录已连接');
+    } catch(e) {
+      if (next) { failedAutomatic.current = routingFingerprint(next); pendingSettingsSave.current = true; setSettings(next); setWriteError(`配置目录保存失败：${String(e)}`); }
+      else setError(String(e));
+    } finally { operation.current = false; setBusy(''); }
+  }
   async function execute() { if (operation.current || !confirm) return; operation.current = true; const action = confirm; setConfirm(null); setBusy(action === 'apply' ? '正在写入本工具规则…' : '正在撤销本工具规则…'); setError(''); try {
     setDiagnostics(undefined);
     // Refresh every chosen app on disk so helpers can be discovered even when not running.
@@ -147,27 +197,27 @@ export default function App() {
     const res = action === 'apply' ? await api.applyRules(chosen, settings.configDir, settings.otherTraffic, settings.proxyGroup) : await api.removeRules(settings.configDir);
     const next: Settings = { ...settings, selected: chosen };
     next.applied = { revision: ROUTING_REVISION, fingerprint: routingFingerprint(next), pendingRestart: res.pendingRestart ?? api.desktop, hasRules: action === 'apply' && (chosen.length > 0 || settings.otherTraffic === 'proxy') };
-    setSettings(next); setResult(res.message); setToast(res.message); failedAutomatic.current = ''; setAutomaticError('');
+    setSettings(next); setResult(res.message); setToast(res.message); failedAutomatic.current = ''; setWriteError(''); setAutomaticError(''); pendingSettingsSave.current = false; readFailures.current = 0;
     // A settings/detection failure after writing must not masquerade as a failed rule write.
     const followup = await Promise.allSettled([api.saveSettings(next), api.integration(settings.configDir)]);
-    const warnings: string[] = [];
-    if (followup[0].status === 'rejected') warnings.push('规则操作已完成，但状态保存失败；请重试刷新');
-    if (followup[1].status === 'fulfilled') setConnection(followup[1].value);
-    else warnings.push('规则操作已完成，但 Clash 状态检测失败；请重试刷新');
-    if (warnings.length) setError(warnings.join('；'));
-  } catch(e) { failedAutomatic.current = routingFingerprint(settings); setError(String(e)); } finally { operation.current = false; setBusy(''); } }
+    if (followup[0].status === 'rejected') { failedAutomatic.current = routingFingerprint(next); pendingSettingsSave.current = true; setWriteError('规则操作已完成，但状态保存失败'); }
+    if (followup[1].status === 'fulfilled') { setConnection(followup[1].value); setConnectionError(''); }
+    else setConnectionError('规则操作已完成，但 Clash 状态检测暂时失败，正在自动重试');
+  } catch(e) { failedAutomatic.current = routingFingerprint(settings); setWriteError(e instanceof Error ? e.message : String(e)); } finally { operation.current = false; setBusy(''); } }
   return <ThemeProvider theme={theme}><CssBaseline/><Box sx={{ display: 'flex', minHeight: '100vh' }}>
     <Paper square sx={{ width: 205, flexShrink: 0, borderRight: 1, borderColor: 'divider', bgcolor: settings.dark ? '#1e202a' : '#eef0f7', p: 2.5, display: { xs: 'none', md: 'flex' }, flexDirection: 'column' }}>
       <Stack direction="row" spacing={1.2} alignItems="center" sx={{ mb: 5 }}><Box component="img" src="/app-icon.png" alt="直连助手图标" sx={{ width: 36, height: 36, objectFit: 'contain' }}/><Typography fontWeight={700} fontSize={19}>直连助手</Typography></Stack>
       <List disablePadding>{[['apps', '应用分流'], ['settings', '设置']].map(([id, label]) => <ListItemButton key={id} selected={page === id} onClick={() => setPage(id)} sx={{ borderRadius: 2, mb: 1 }}><ListItemIcon sx={{ minWidth: 34 }}>{id === 'apps' ? <Apps/> : <SettingsIcon/>}</ListItemIcon><ListItemText primary={label}/></ListItemButton>)}</List>
-      <Box sx={{ mt: 'auto', pt: 4 }}><Typography variant="caption" color="text.secondary">Clash App Bypass · v0.1.6<br/>Clash Verge Rev 第三方助手</Typography></Box>
+      <Box sx={{ mt: 'auto', pt: 4 }}><Typography variant="caption" color="text.secondary">Clash App Bypass · v0.1.7<br/>Clash Verge Rev 第三方助手</Typography></Box>
     </Paper>
     <Box component="main" sx={{ flex: 1, minWidth: 0, p: { xs: 2, md: 4 }, maxWidth: 1100, mx: 'auto' }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" mb={3}><Typography variant="h4">{page === 'apps' ? '不使用代理的软件' : '设置'}</Typography><Stack direction="row" alignItems="center" spacing={1}><Chip size="small" variant="outlined" color={api.desktop ? 'primary' : 'warning'} label={api.desktop ? '桌面版' : '浏览器演示'}/><Tooltip title="切换主题"><IconButton disabled={blocked || !ready} onClick={() => persist({ ...settings, dark: !settings.dark })}>{settings.dark ? <LightMode/> : <DarkMode/>}</IconButton></Tooltip><IconButton sx={{ display: { md: 'none' } }} onClick={() => setPage(page === 'apps' ? 'settings' : 'apps')} aria-label="切换设置页面"><SettingsIcon/></IconButton></Stack></Stack>
       {error && <Alert severity="error" onClose={() => setError('')} action={<Button color="inherit" size="small" disabled={blocked} onClick={refresh}>重试</Button>} sx={{ mb: 2, overflowWrap: 'anywhere' }}>{error}</Alert>}
       {!api.desktop && <Alert severity="info" sx={{ mb: 2 }}>浏览器中展示示例数据。真实扫描与配置应用需要运行桌面版。</Alert>}
       {automaticBusy && <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>正在自动检查和同步规则…</Typography>}
-      {automaticError && <Alert severity="warning" sx={{ mb: 2 }} action={<Button disabled={blocked} onClick={() => { if (operation.current) return; failedAutomatic.current = ''; setAutomaticError(''); setSettings(old => ({ ...old })); }}>重试自动处理</Button>}>{automaticError}。选择已保留，未标记为成功。</Alert>}
+      {connectionError && <Alert severity="info" sx={{ mb: 2 }}>{connectionError}。会继续自动检测，无需重新选择已保存的目录。</Alert>}
+      {automaticError && <Alert severity="info" sx={{ mb: 2 }} action={<Button disabled={blocked} onClick={() => { if (operation.current) return; readFailures.current = 0; setAutomaticError(''); setSettings(old => ({ ...old })); }}>立即重试检查</Button>}>{automaticError}。正在自动重试检查，选择已保留。</Alert>}
+      {writeError && <Alert severity="warning" sx={{ mb: 2 }} action={<Button disabled={blocked} onClick={() => { if (operation.current) return; failedAutomatic.current = ''; setWriteError(''); setAutomaticError(''); readFailures.current = 0; setSettings(old => ({ ...old })); }}>重试自动处理</Button>}>{writeError}。自动写入已暂停，连接检查会继续；修改分流选择或重试后恢复。</Alert>}
       {busy && <Stack direction="row" spacing={1} alignItems="center" mb={2} role="status"><CircularProgress size={17}/><Typography variant="body2">{busy}</Typography></Stack>}
       {page === 'apps' ? <>
         <Alert severity={status.label === '规则已写入' ? 'success' : 'info'} sx={{ mb: 2 }}><Stack direction="row" spacing={1} alignItems="center"><Chip size="small" label={status.label}/><Typography variant="body2">{status.message}</Typography>{settings.applied?.pendingRestart && <Button size="small" disabled={blocked} onClick={refresh}>已重启，检查状态</Button>}</Stack></Alert>
@@ -202,8 +252,8 @@ export default function App() {
           {filtered.map((a, i) => <Box key={a.id}><Stack direction="row" spacing={2} alignItems="center" sx={{ p: 2 }}><Avatar variant="rounded" sx={{ bgcolor: selected.has(a.id) ? 'primary.main' : 'action.disabledBackground', color: selected.has(a.id) ? 'primary.contrastText' : 'text.secondary' }}>{a.name.slice(0, 1)}</Avatar><Box sx={{ flex: 1, minWidth: 0 }}><Typography fontWeight={600}>{a.name}</Typography><Typography variant="caption" color="text.secondary">{a.pathMissing ? '主程序路径失效 · 请重新添加' : a.running ? '运行中' : '未运行'} · {a.source}</Typography><Tooltip title={a.path}><Typography variant="caption" display="block" color="text.secondary" noWrap>{a.path}</Typography></Tooltip><Button size="small" sx={{ p: 0, mt: .5, fontSize: 12 }} endIcon={expanded.includes(a.id) ? <ExpandMore/> : <ChevronRight/>} aria-expanded={expanded.includes(a.id)} onClick={() => setExpanded(old => old.includes(a.id) ? old.filter(id => id !== a.id) : [...old, a.id])}>{a.processes.length} 个关联进程</Button></Box><Stack alignItems="center"><Switch checked={selected.has(a.id)} disabled={blocked || !ready} slotProps={{ input: { 'aria-label': `${a.name}不使用代理` } }} onChange={(_, checked) => persist({ ...settings, selected: checked ? [...settings.selected, a] : settings.selected.filter(b => b.id !== a.id) })}/><Typography variant="caption" color="text.secondary">{selected.has(a.id) ? '不使用代理' : settings.otherTraffic === 'proxy' ? '使用代理' : '订阅规则'}</Typography></Stack></Stack><Collapse in={expanded.includes(a.id)}><Box sx={{ px: 3, pb: 2 }}>{a.warnings.map(w => <Alert key={w} severity="warning" sx={{ mb: 1 }}>{w}</Alert>)}{(a.suggestedProcesses || []).filter(p => !a.processes.some(known => known.toLowerCase() === p.toLowerCase())).map(p => <Paper key={p} variant="outlined" sx={{ p: 1.5, mb: 1 }}><Typography variant="body2">候选关联程序 · 来自当前启动链</Typography><Typography sx={{ fontSize: 12, overflowWrap: "anywhere" }}>{p}</Typography><Button size="small" disabled={blocked || !selected.has(a.id)} onClick={() => includeCandidate(a, p)}>确认关联此程序</Button><Typography variant="caption" display="block">确认后会自动应用。未选中软件时，请先打开“不使用代理”开关。</Typography></Paper>)}<Typography variant="caption" color="text.secondary">按完整程序路径匹配；同名的其他软件不会被一起处理。</Typography>{a.processes.map(p => <Typography key={p} sx={{ fontFamily: 'monospace', fontSize: 12, overflowWrap: 'anywhere', mt: .5 }}>{p}</Typography>)}</Box></Collapse>{i < filtered.length - 1 && <Divider/>}</Box>)}
         </Paper>
         <Stack direction={{ xs: 'column', sm: 'row' }} alignItems={{ sm: 'center' }} justifyContent="space-between" spacing={2} mt={3}><Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>{result || '选择会自动保存并应用；不确定的关联程序才需要确认。'}</Typography><Stack direction="row" spacing={1}><Button startIcon={<Undo/>} disabled={blocked || !ready || (api.desktop && !connection?.managed)} onClick={() => { if (!operation.current) setConfirm('remove'); }}>撤销本工具规则</Button><Button variant="contained" disabled={blocked || !ready || (api.desktop && !connection?.found)} onClick={() => { if (!operation.current) setConfirm('apply'); }}>立即应用</Button></Stack></Stack>
-        <Alert severity={connection?.found ? 'info' : 'warning'} sx={{ mt: 3 }}>{connection?.message || '尚未检测 Clash 配置目录'}{api.desktop && !connection?.found && <Button size="small" onClick={() => setPage('settings')}>连接 Clash</Button>}</Alert>
-      </> : <Paper variant="outlined" sx={{ p: 3 }}><Typography variant="h6" mb={1}>Clash Verge Rev 配置目录</Typography><Typography color="text.secondary" variant="body2" mb={2}>自动检测标准目录；便携版可手动选择包含 profiles.yaml 的文件夹。</Typography><Stack direction="row" spacing={1}><TextField size="small" fullWidth disabled={blocked} value={draftDir} onChange={e => setDraftDir(e.target.value)} placeholder="留空使用自动检测" slotProps={{ htmlInput: { 'aria-label': 'Clash 配置目录' } }}/><Button variant="outlined" disabled={!api.desktop || blocked} onClick={chooseDir}><FolderOpen/></Button></Stack><Button variant="contained" sx={{ mt: 2 }} disabled={!api.desktop || blocked || !ready} onClick={saveDir}>检测并保存</Button><Divider sx={{ my: 3 }}/><Typography variant="h6" mb={1}>使用说明</Typography><Typography variant="body2" color="text.secondary" sx={{ lineHeight: 2 }}>1. 打开需要直连的软件，并打开“不使用代理”开关。<br/>2. 工具会自动保存规则并尝试在线应用，无需退出 Clash。<br/>3. 保持助手打开，它会定期补齐可信程序并检查新连接。<br/>4. 不确定的关联或配置冲突才需要处理提示。<br/>5. 关闭助手后停止检测，已保存的规则继续有效。</Typography><Alert severity="info" sx={{ mt: 2 }}>通过产品信息、已知安装结构和当前启动链发现关联程序。启动链候选需要确认后才能加入规则。使用“检查实际连接”查看当前路线；没有连接、路径无法读取或启动器已退出时，仍可能无法完整识别。应用成功仅表示规则已写入。</Alert><Typography variant="caption" display="block" mt={2} color="text.secondary">本工具独立开发，不是 Clash Verge 官方产品。在线应用会检查配置变化并备份；无法安全完成时保留选择并提示处理。</Typography></Paper>}
+        <Alert severity={connectionChecking || connection?.found ? 'info' : 'warning'} sx={{ mt: 3 }}>{connectionChecking ? '正在自动连接已保存的 Clash 配置，无需重新选择目录。' : connection?.message || '正在重试检测已保存的 Clash 配置目录'}{api.desktop && ready && !connectionChecking && !connection?.found && <Button size="small" onClick={() => setPage('settings')}>连接 Clash</Button>}</Alert>
+      </> : <Paper variant="outlined" sx={{ p: 3 }}><Typography variant="h6" mb={1}>Clash Verge Rev 配置目录</Typography><Typography color="text.secondary" variant="body2" mb={2}>自动检测标准目录；便携版可手动选择包含 profiles.yaml 的文件夹。</Typography><Stack direction="row" spacing={1}><TextField size="small" fullWidth disabled={blocked} value={draftDir} onChange={e => setDraftDir(e.target.value)} placeholder="留空使用自动检测" slotProps={{ htmlInput: { 'aria-label': 'Clash 配置目录' } }}/><Button variant="outlined" disabled={!api.desktop || blocked} onClick={chooseDir}><FolderOpen/></Button></Stack>{connection?.found && <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>当前连接目录：{connection.configDir}{!settings.configDir && '（自动检测）'}</Typography>}<Button variant="contained" sx={{ mt: 2 }} disabled={!api.desktop || blocked || !ready} onClick={saveDir}>检测并保存</Button><Divider sx={{ my: 3 }}/><Typography variant="h6" mb={1}>使用说明</Typography><Typography variant="body2" color="text.secondary" sx={{ lineHeight: 2 }}>1. 打开需要直连的软件，并打开“不使用代理”开关。<br/>2. 工具会自动保存规则并尝试在线应用，无需退出 Clash。<br/>3. 保持助手打开，它会定期补齐可信程序并检查新连接。<br/>4. 不确定的关联或配置冲突才需要处理提示。<br/>5. 关闭助手后停止检测，已保存的规则继续有效。</Typography><Alert severity="info" sx={{ mt: 2 }}>通过产品信息、已知安装结构和当前启动链发现关联程序。启动链候选需要确认后才能加入规则。使用“检查实际连接”查看当前路线；没有连接、路径无法读取或启动器已退出时，仍可能无法完整识别。应用成功仅表示规则已写入。</Alert><Typography variant="caption" display="block" mt={2} color="text.secondary">本工具独立开发，不是 Clash Verge 官方产品。在线应用会检查配置变化并备份；无法安全完成时保留选择并提示处理。</Typography></Paper>}
     </Box>
     <Dialog open={confirm !== null} onClose={() => !blocked && setConfirm(null)} maxWidth="sm" fullWidth><DialogTitle>{confirm === 'apply' ? '应用不使用代理的选择' : '撤销本工具规则'}</DialogTitle><DialogContent><Typography>{api.desktop ? '工具会保留原脚本和其他配置，先备份再尝试在线应用；无需退出 Clash。无法安全恢复订阅分流时会提示一次性退出后操作。' : '这次操作只模拟应用结果，不会修改 Clash。'}</Typography><Alert severity="info" sx={{ mt: 2 }}>{confirm === 'apply' ? `已选择 ${settings.selected.length} 个软件，当前识别 ${count} 个进程。应用前会再扫描这些软件的程序目录。其他流量：${settings.otherTraffic === 'proxy' ? '使用代理组 ' + settings.proxyGroup : '遵循订阅规则'}。` : '保留软件选择，移除本工具写入的规则。原有订阅及其他规则保持有效。'}</Alert></DialogContent><DialogActions><Button disabled={blocked} onClick={() => setConfirm(null)}>取消</Button><Button disabled={blocked} variant="contained" onClick={execute}>{api.desktop ? '继续' : '模拟继续'}</Button></DialogActions></Dialog>
     <Snackbar open={!!toast} autoHideDuration={5000} onClose={() => setToast('')} message={toast}/>

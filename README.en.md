@@ -4,7 +4,7 @@
 
 [中文](README.md) | **English**
 
-A Windows application bypass assistant for Clash Verge Rev. Select applications that should connect directly, inspect related processes, and generate rules matching their full executable paths. This is an independent third-party project, unaffiliated with Clash Verge Rev. Current source version: **0.1.6**. The application interface is currently in Chinese.
+A Windows application bypass assistant for Clash Verge Rev. Select applications that should connect directly, inspect related processes, and generate rules matching their full executable paths. This is an independent third-party project, unaffiliated with Clash Verge Rev. Current source version: **0.1.7**. The application interface is currently in Chinese.
 
 ## Features
 
@@ -33,7 +33,7 @@ The author has confirmed that the published v0.1.1 works on their own Windows co
 
 ## Usage
 
-1. Open the desktop app and wait for scanning. If automatic detection fails, select the Clash Verge Rev configuration folder containing `profiles.yaml` in Settings (`设置`).
+1. Open the desktop app. It automatically uses the previously saved Clash configuration folder, or detects it when the field is empty. Connection detection reports separately from application scanning and retries temporary read failures. If no folder is found on first use, select the Clash Verge Rev configuration folder containing `profiles.yaml` in Settings (`设置`).
 2. Enable “Do not use proxy” (`不使用代理`) for applications that should connect directly. Expand each entry to review associated processes.
 3. Configure “Other traffic” (`其他流量`). The default is “Use proxy” (`使用代理`) with the `GLOBAL` group. Ensure that group ultimately selects a working proxy rather than `DIRECT`.
 4. Selections are saved and synchronized automatically. Running Clash receives a verified live update without a manual restart. While open, the assistant refreshes associations and rule status approximately every 30 seconds.
@@ -119,3 +119,10 @@ Diagnostics are a current snapshot, do not terminate existing connections, and c
 - Live recovery verifies the original routing mode, process lookup, and observable network settings. Subscription rules identical to managed rules are preserved; undo removes only the added portion.
 
 Tests cover synchronization, undo, status checks, association trust boundaries, and named-pipe conflicts and recovery. An isolated local core verifies live application, removal, persistence after restart, and restoring mode when the rules are unchanged. The current API cannot verify every possible external configuration change; special or protected processes may still need manual addition.
+
+## Automatic reconnection (0.1.7)
+
+- Reopening the assistant uses the saved folder and reports connection detection without waiting for the full application scan. Startup shows a connecting state. Settings display the detected folder while an empty input continues to mean automatic detection.
+- Temporary application refresh, folder detection, and controller read failures retry with backoff and clear their temporary messages after recovery. A single read failure no longer permanently stops automatic checks.
+- Write or settings-save failures still pause automatic writes while read-only checks continue. Reconnecting does not resume rules explicitly undone by the user.
+- Windows network folder display retains its absolute path so saved folders remain recognizable on the next launch.
