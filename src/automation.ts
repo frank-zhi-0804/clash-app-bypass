@@ -1,6 +1,7 @@
 import { routingFingerprint } from './workflow.ts';
 import type { AppEntry, Integration, OperationResult, Settings } from './types.ts';
 import type { RoutingSnapshot } from './routingDiagnostics.ts';
+import { websiteDomains } from './websites.ts';
 export const ROUTING_REVISION = 3;
 export type SynchronizationPhase = 'refresh' | 'integration' | 'diagnose' | 'selection' | 'apply' | 'save';
 export class SynchronizationFailure extends Error {
@@ -29,7 +30,7 @@ export interface AutomationServices {
   refresh(apps: AppEntry[]): Promise<AppEntry[]>;
   integration(dir: string): Promise<Integration>;
   diagnose(dir: string): Promise<RoutingSnapshot>;
-  apply(apps: AppEntry[], dir: string, mode: Settings['otherTraffic'], group: string): Promise<OperationResult>;
+  apply(apps: AppEntry[], dir: string, mode: Settings['otherTraffic'], group: string, websites?: string[]): Promise<OperationResult>;
   save(settings: Settings): Promise<void>;
 }
 export async function synchronize(settings: Settings, services: AutomationServices, options: SynchronizationOptions = {}) {
@@ -49,22 +50,24 @@ export async function synchronize(settings: Settings, services: AutomationServic
   if (options.allowWrites !== false && missing.length) throw new SynchronizationFailure('selection', `程序路径已失效，请重新选择：${missing.map(a => a.name).join('、')}`, integration);
   const fingerprint = routingFingerprint(next);
   const dirty = fingerprint !== next.applied?.fingerprint || next.applied?.revision !== ROUTING_REVISION;
+  const websites = websiteDomains(next.websites);
   const rules = new Set(snapshot?.rules.map(p => p.toLowerCase()));
-  const incomplete = snapshot && (snapshot.mode !== 'rule' || (snapshot.findProcessMode && snapshot.findProcessMode !== 'always') || next.selected.some(a => a.processes.some(p => !rules.has(p.toLowerCase()))));
+  const domainRules = new Set(snapshot?.domainRules?.map(domain => domain.toLowerCase()));
+  const incomplete = snapshot && (snapshot.mode !== 'rule' || (next.selected.length > 0 && snapshot.findProcessMode && snapshot.findProcessMode !== 'always') || next.selected.some(a => a.processes.some(p => !rules.has(p.toLowerCase()))) || websites.some(domain => !domainRules.has(domain)));
   let message = '';
   let ruleWriteCompleted = false;
   const suspended = next.applied?.hasRules === false;
   // Do not enable proxy fallback on a fresh install before the user chooses an app.
   // An explicit undo stays undone even when scanning discovers more helper paths.
-  if (options.allowWrites !== false && !suspended && (next.selected.length || next.applied?.hasRules) && (dirty || incomplete)) {
+  if (options.allowWrites !== false && !suspended && (next.selected.length || websites.length || next.applied?.hasRules) && (dirty || incomplete)) {
     let applied: OperationResult;
-    try { applied = await services.apply(next.selected, next.configDir, next.otherTraffic, next.proxyGroup); }
+    try { applied = await services.apply(next.selected, next.configDir, next.otherTraffic, next.proxyGroup, websites); }
     catch (error) { throw new SynchronizationFailure('apply', error, integration); }
     ruleWriteCompleted = true;
-    next = { ...next, applied: { fingerprint, revision: ROUTING_REVISION, pendingRestart: applied.pendingRestart ?? !integration.running, hasRules: next.selected.length > 0 || next.otherTraffic === 'proxy' } };
+    next = { ...next, applied: { fingerprint, revision: ROUTING_REVISION, pendingRestart: applied.pendingRestart ?? !integration.running, hasRules: next.selected.length > 0 || websites.length > 0 || next.otherTraffic === 'proxy' } };
     message = applied.message;
   } else if (snapshot && next.applied?.pendingRestart && (suspended
-    ? !integration.managed && next.selected.every(a => a.processes.every(p => !rules.has(p.toLowerCase())))
+    ? !integration.managed && next.selected.every(a => a.processes.every(p => !rules.has(p.toLowerCase()))) && websites.every(domain => !domainRules.has(domain))
     : !incomplete)) {
     next = { ...next, applied: { ...next.applied, pendingRestart: false } };
   }

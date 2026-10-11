@@ -47,7 +47,7 @@ pub fn plan(original: &str, previous: Option<&str>, next: Option<&str>) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::make_block;
+    use crate::rules::{make_block, make_block_with_websites};
     #[test] fn preserves_network_fields_and_refuses_external_changes() {
         let old = make_block(&[], "proxy", "GLOBAL").unwrap();
         let next = make_block(&[r"C:\Apps\app.exe".into()], "proxy", "GLOBAL").unwrap();
@@ -75,5 +75,22 @@ mod tests {
         assert_eq!(inserted[0], inserted[1]);
         let (_, _, removed) = plan(&payload, Some(&next), None).unwrap();
         assert_eq!(removed, before);
+    }
+    #[test] fn website_only_subscription_rules_preserve_original_duplicates_on_update_and_undo() {
+        let old = make_block_with_websites(&[], &["example.com".into()], "subscription", "").unwrap();
+        let next = make_block_with_websites(&[], &["alice.github.io".into()], "subscription", "").unwrap();
+        let source = "rules: ['DOMAIN-SUFFIX,example.com,DIRECT', 'MATCH,Proxy']";
+        let (payload, original, inserted) = plan(source, None, Some(&old)).unwrap();
+        assert_eq!(inserted, vec!["DOMAIN-SUFFIX,example.com,DIRECT", "DOMAIN-SUFFIX,example.com,DIRECT", "MATCH,Proxy"]);
+        let (updated, _, changed) = plan(&payload, Some(&old), Some(&next)).unwrap();
+        assert_eq!(changed, vec!["DOMAIN-SUFFIX,alice.github.io,DIRECT", "DOMAIN-SUFFIX,example.com,DIRECT", "MATCH,Proxy"]);
+        let (_, _, removed) = plan(&updated, Some(&next), None).unwrap();
+        assert_eq!(removed, original);
+    }
+    #[test] fn old_app_only_blocks_upgrade_with_websites_before_proxy_fallback() {
+        let previous = make_block(&[], "proxy", "GLOBAL").unwrap();
+        let next = make_block_with_websites(&[r"C:\Apps\app.exe".into()], &["example.com".into()], "proxy", "GLOBAL").unwrap();
+        let (_, _, written) = plan("rules: ['MATCH,GLOBAL']", Some(&previous), Some(&next)).unwrap();
+        assert_eq!(written, vec![r"PROCESS-PATH,C:\Apps\app.exe,DIRECT", "DOMAIN-SUFFIX,example.com,DIRECT", "MATCH,GLOBAL"]);
     }
 }

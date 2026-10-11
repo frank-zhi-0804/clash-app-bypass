@@ -1,13 +1,16 @@
 import type { AppEntry, Integration, Settings } from './types.ts';
+import { websiteDomains } from './websites.ts';
 
 // Only routing changes make a selection dirty; theme and app display metadata do not.
 export function routingFingerprint(settings: Settings): string {
   const normalize = (path: string) => path.replaceAll('/', '\\').toLowerCase();
+  const websites = websiteDomains(settings.websites).sort();
   return JSON.stringify({
     configDir: normalize(settings.configDir),
     mode: settings.otherTraffic,
     group: settings.otherTraffic === 'proxy' ? settings.proxyGroup : '',
     paths: [...new Set(settings.selected.flatMap(app => [app.path, ...app.processes]).map(normalize))].sort(),
+    ...(websites.length ? { websites } : {}),
   });
 }
 
@@ -37,7 +40,7 @@ export function applicationStatus(settings: Settings, integration?: Integration,
   if (applied?.pendingRestart) {
     return { label: '待重启 Clash', message: `${applied.hasRules ? '规则已写入' : '规则已撤销'}，请重新打开 Clash。${dirty ? '还有未应用的选择，需再次应用。' : '重启后可在 Clash 连接页面检查路线。'}` };
   }
-  if (applied?.hasRules === false) return { label: '自动应用已暂停', message: '本工具规则已撤销，软件选择仍保留。修改分流选择或点击“立即应用”后恢复自动应用。' };
+  if (applied?.hasRules === false) return { label: '自动应用已暂停', message: '本工具规则已撤销，软件和网站选择仍保留。修改分流选择或点击“立即应用”后恢复自动应用。' };
   if (!integration?.found) return { label: '未连接 Clash', message: '请在设置中连接 Clash 配置目录；软件选择保存在本机。' };
   if (applied?.hasRules && integration.managed && !dirty) return { label: '规则已写入', message: '当前选择已写入规则；请在 Clash 中使用规则模式并检查新连接路线。' };
   if (!applied && integration.managed) return { label: '检测到已有规则', message: '已有本工具规则。重新应用可将规则更新为当前选择，或点击撤销。' };

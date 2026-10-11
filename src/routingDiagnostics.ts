@@ -3,6 +3,7 @@ export interface RoutingSnapshot {
   mode: string;
   findProcessMode: string;
   rules: string[];
+  domainRules?: string[];
   unidentifiedConnections: number;
   connections: { path: string; direct: boolean; rejected: boolean; unknown?: boolean; rule: string; start: string }[];
 }

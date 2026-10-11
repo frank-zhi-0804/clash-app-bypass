@@ -35,6 +35,7 @@ $snapshot = [ordered]@{
   mode = $config.mode
   findProcessMode = $config.'find-process-mode'
   rules = @($rules.rules | Where-Object { $_.type -eq 'ProcessPath' -and $_.proxy -eq 'DIRECT' -and -not $_.extra.disabled } | ForEach-Object { $_.payload })
+  domainRules = @($rules.rules | Where-Object { $_.type -eq 'DomainSuffix' -and $_.proxy -eq 'DIRECT' -and -not $_.extra.disabled -and $_.payload } | ForEach-Object { ([string]$_.payload).ToLowerInvariant() })
   unidentifiedConnections = @($connections.connections | Where-Object { -not $_.metadata.processPath }).Count
   connections = @($connections.connections | Where-Object { $_.metadata.processPath } | ForEach-Object {
     [ordered]@{ path = $_.metadata.processPath; direct = (@($_.chains) -ccontains 'DIRECT'); rejected = (@($_.chains | Where-Object { $_ -cmatch '^REJECT(?:-DROP)?$' }).Count -gt 0); unknown = (@($_.chains).Count -eq 0); rule = $_.rule; start = $_.start }

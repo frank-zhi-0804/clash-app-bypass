@@ -2,6 +2,7 @@
 
 mod rules;
 mod live;
+mod websites;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -19,11 +20,11 @@ struct AppEntry { id: String, name: String, path: String, running: bool, process
 struct AppliedState { #[serde(default)] revision: u32, fingerprint: String, pending_restart: bool, has_rules: bool }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Settings { #[serde(default)] selected: Vec<AppEntry>, #[serde(default)] config_dir: String, #[serde(default)] dark: bool, #[serde(default = "default_mode")] other_traffic: String, #[serde(default = "default_group")] proxy_group: String, #[serde(default)] applied: Option<AppliedState> }
+struct Settings { #[serde(default)] selected: Vec<AppEntry>, #[serde(default)] websites: Vec<String>, #[serde(default)] config_dir: String, #[serde(default)] dark: bool, #[serde(default = "default_mode")] other_traffic: String, #[serde(default = "default_group")] proxy_group: String, #[serde(default)] applied: Option<AppliedState> }
 fn default_mode() -> String { "proxy".into() }
 fn default_group() -> String { "GLOBAL".into() }
 impl Default for Settings {
-    fn default() -> Self { Self { selected: vec![], config_dir: String::new(), dark: false, other_traffic: default_mode(), proxy_group: default_group(), applied: None } }
+    fn default() -> Self { Self { selected: vec![], websites: vec![], config_dir: String::new(), dark: false, other_traffic: default_mode(), proxy_group: default_group(), applied: None } }
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -236,7 +237,7 @@ fn proxy_groups(dir: &Path) -> Vec<String> {
     }
     groups
 }
-fn modify_rules(app: &tauri::AppHandle, apps: &[AppEntry], input: &str, remove: bool, mode: &str, group: &str) -> Result<OperationResult> {
+fn modify_rules(app: &tauri::AppHandle, apps: &[AppEntry], websites: &[String], input: &str, remove: bool, mode: &str, group: &str) -> Result<OperationResult> {
     let data = data_dir(app)?;
     let lock = fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(data.join("operation.lock")).map_err(|e| e.to_string())?;
     lock.try_lock_exclusive().map_err(|_| "另一个直连助手正在修改规则，请稍后重试")?;
@@ -261,12 +262,13 @@ fn modify_rules(app: &tauri::AppHandle, apps: &[AppEntry], input: &str, remove: 
     let mut manifest: Manifest = read_json(&manifest_path)?;
     let key = path.to_string_lossy().to_lowercase(); verify_ownership(&manifest, &key, &current)?;
     let paths: Vec<String> = apps.iter().flat_map(|a| a.processes.clone()).collect();
-    let remove = remove || (paths.is_empty() && mode == "subscription");
+    let sites = websites::validate_saved(websites)?;
+    let remove = remove || (paths.is_empty() && sites.is_empty() && mode == "subscription");
     if remove && current.is_none() { return Ok(OperationResult { message: "当前没有本工具规则，无需撤销".into(), rule_count: 0, pending_restart: false }); }
     if !remove && mode == "proxy" && !proxy_groups(&dir).iter().any(|name| name == group) {
         return Err("所选代理组已不存在，请刷新订阅后重新检测并选择代理组".into());
     }
-    let block = if remove { None } else { Some(rules::make_block(&paths, mode, group)?) };
+    let block = if remove { None } else { Some(rules::make_block_with_websites(&paths, &sites, mode, group)?) };
     if !remove {
         for app in apps {
             if !Path::new(&app.path).is_file() { return Err(format!("主程序路径已失效，请取消选择并重新添加：{}", app.path)); }
@@ -328,14 +330,16 @@ fn modify_rules(app: &tauri::AppHandle, apps: &[AppEntry], input: &str, remove: 
         }
         fs::remove_file(&journal_path).map_err(|e| e.to_string())?;
     } else { atomic_write(&path, new_source.as_bytes())?; }
-    let rule_count = if remove { 0 } else { paths.into_iter().collect::<std::collections::BTreeSet<_>>().len() };
+    let rule_count = if remove { 0 } else { paths.into_iter().collect::<std::collections::BTreeSet<_>>().len() + sites.len() };
     Ok(OperationResult { message: if running { format!("已保存并在线应用 {rule_count} 条规则，新连接已可使用规则模式；无需退出 Clash") } else { format!("已保存 {rule_count} 条规则，下次启动 Clash 后生效") }, rule_count, pending_restart: !running })
 }
 
 #[tauri::command]
 fn load_settings(app: tauri::AppHandle) -> Result<Settings> { read_json(&data_dir(&app)?.join("settings.json")) }
 #[tauri::command]
-fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<()> { write_json(&data_dir(&app)?.join("settings.json"), &settings) }
+fn save_settings(app: tauri::AppHandle, mut settings: Settings) -> Result<()> { settings.websites = websites::validate_saved(&settings.websites)?; write_json(&data_dir(&app)?.join("settings.json"), &settings) }
+#[tauri::command]
+fn normalize_website(input: String) -> Result<websites::NormalizedWebsite> { websites::normalize(&input) }
 #[tauri::command]
 async fn scan_apps() -> Result<Vec<AppEntry>> { tauri::async_runtime::spawn_blocking(|| scan(None)).await.map_err(|e| e.to_string())? }
 #[tauri::command]
@@ -355,12 +359,12 @@ async fn inspect_integration(config_dir: String) -> Result<Integration> {
     }).await.map_err(|e| e.to_string())?
 }
 #[tauri::command]
-async fn apply_rules(app: tauri::AppHandle, state: tauri::State<'_, OperationLock>, apps: Vec<AppEntry>, config_dir: String, other_traffic: String, proxy_group: String) -> Result<OperationResult> {
+async fn apply_rules(app: tauri::AppHandle, state: tauri::State<'_, OperationLock>, apps: Vec<AppEntry>, websites: Option<Vec<String>>, config_dir: String, other_traffic: String, proxy_group: String) -> Result<OperationResult> {
     // A non-blocking guard avoids overlapping requests within one process.
     let lock = state.0.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = lock.try_lock().map_err(|_| "操作正在进行，请稍后重试")?;
-        modify_rules(&app, &apps, &config_dir, false, &other_traffic, &proxy_group)
+        modify_rules(&app, &apps, &websites.unwrap_or_default(), &config_dir, false, &other_traffic, &proxy_group)
     }).await.map_err(|e| e.to_string())?
 }
 #[tauri::command]
@@ -368,7 +372,7 @@ async fn remove_rules(app: tauri::AppHandle, state: tauri::State<'_, OperationLo
     let lock = state.0.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = lock.try_lock().map_err(|_| "操作正在进行，请稍后重试")?;
-        modify_rules(&app, &[], &config_dir, true, "subscription", "")
+        modify_rules(&app, &[], &[], &config_dir, true, "subscription", "")
     }).await.map_err(|e| e.to_string())?
 }
 fn main() {
@@ -376,7 +380,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| { if let Some(w) = app.get_webview_window("main") { let _ = w.set_focus(); } }))
         .plugin(tauri_plugin_dialog::init())
         .manage(OperationLock(Arc::new(Mutex::new(()))))
-        .invoke_handler(tauri::generate_handler![load_settings, save_settings, scan_apps, inspect_app, refresh_selected, inspect_integration, apply_rules, remove_rules, diagnose_routing])
+        .invoke_handler(tauri::generate_handler![load_settings, save_settings, normalize_website, scan_apps, inspect_app, refresh_selected, inspect_integration, apply_rules, remove_rules, diagnose_routing])
         .run(tauri::generate_context!()).expect("无法启动直连助手");
 }
 
@@ -427,6 +431,7 @@ mod tests {
         assert_eq!(empty.other_traffic, "proxy");
         assert_eq!(empty.proxy_group, "GLOBAL");
         let old: Settings = serde_json::from_str(r#"{"selected":[],"configDir":"","dark":false}"#).unwrap();
+        assert!(old.websites.is_empty());
         assert_eq!(old.other_traffic, "proxy");
         assert_eq!(old.proxy_group, "GLOBAL");
     }

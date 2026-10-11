@@ -10,7 +10,8 @@ export interface AppEntry {
   pathMissing?: boolean;
 }
 export interface AppliedState { revision?: number; fingerprint: string; pendingRestart: boolean; hasRules: boolean; }
-export interface Settings { selected: AppEntry[]; configDir: string; dark: boolean; otherTraffic: 'proxy' | 'subscription'; proxyGroup: string; applied?: AppliedState | null; }
+export interface Settings { selected: AppEntry[]; websites?: string[]; configDir: string; dark: boolean; otherTraffic: 'proxy' | 'subscription'; proxyGroup: string; applied?: AppliedState | null; }
+export interface NormalizedWebsite { host: string; domain: string; }
 export interface Integration {
   configDir: string;
   found: boolean;

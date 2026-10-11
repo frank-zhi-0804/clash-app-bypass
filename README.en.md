@@ -4,10 +4,11 @@
 
 [中文](README.md) | **English**
 
-A Windows application bypass assistant for Clash Verge Rev. Select applications that should connect directly, inspect related processes, and generate rules matching their full executable paths. This is an independent third-party project, unaffiliated with Clash Verge Rev. Current source version: **0.1.7**. The application interface is currently in Chinese.
+A Windows application and website bypass assistant for Clash Verge Rev. Select applications that should connect directly, or paste a website address to bypass its registrable domain and subdomains. This is an independent third-party project, unaffiliated with Clash Verge Rev. Current source version: **0.1.8**. The application interface is currently in Chinese.
 
 ## Features
 
+- Paste a URL or subdomain to normalize its registrable domain, then apply `DOMAIN-SUFFIX,...,DIRECT` to that domain and all subdomains. Adding or removing websites saves and synchronizes automatically.
 - VALORANT WeGame launchers associate the game executables, login launcher, and known network helpers within the same installation, covering executable paths outside the launcher directory.
 - Scan Start Menu and desktop shortcuts and running processes with readable paths; manually add `.exe` files.
 - Search applications, filter running or selected entries, and inspect related processes.
@@ -35,14 +36,15 @@ The author has confirmed that the published v0.1.1 works on their own Windows co
 
 1. Open the desktop app. It automatically uses the previously saved Clash configuration folder, or detects it when the field is empty. Connection detection reports separately from application scanning and retries temporary read failures. If no folder is found on first use, select the Clash Verge Rev configuration folder containing `profiles.yaml` in Settings (`设置`).
 2. Enable “Do not use proxy” (`不使用代理`) for applications that should connect directly. Expand each entry to review associated processes.
-3. Configure “Other traffic” (`其他流量`). The default is “Use proxy” (`使用代理`) with the `GLOBAL` group. Ensure that group ultimately selects a working proxy rather than `DIRECT`.
-4. Selections are saved and synchronized automatically. Running Clash receives a verified live update without a manual restart. While open, the assistant refreshes associations and rule status approximately every 30 seconds.
-5. Inspect status and new connections for `DIRECT`. Enable TUN in Clash if you need to capture applications that ignore the system proxy.
-6. When switching existing proxy fallback rules to “Follow subscription rules” or undoing them, follow the prompt to exit Clash first so the original subscription configuration can be restored.
+3. Open “Website bypass” (`网站直连`), paste a URL or domain, review the displayed scope, and click “Add website” (`添加网站`). Website bypass also works without selecting applications.
+4. Configure “Other traffic” (`其他流量`). The default is “Use proxy” (`使用代理`) with the `GLOBAL` group. Ensure that group ultimately selects a working proxy rather than `DIRECT`.
+5. Selections are saved and synchronized automatically. Running Clash receives a verified live update without a manual restart. While open, the assistant refreshes associations and rule status approximately every 30 seconds.
+6. Inspect status and new connections for `DIRECT`. Enable TUN in Clash if you need to capture applications that ignore the system proxy.
+7. When switching existing proxy fallback rules to “Follow subscription rules” or undoing them, follow the prompt to exit Clash first so the original subscription configuration can be restored.
 
-The default rule order is “selected executable paths → DIRECT; remaining traffic → MATCH,selected proxy group”. This overrides subscription routing rules in the runtime configuration while preserving the subscription source and original script. “Follow subscription rules” (`遵循订阅规则`) retains subscription routing and does not guarantee that a particular website uses a proxy.
+The default rule order is “selected executable paths → DIRECT; selected domains and subdomains → DIRECT; remaining traffic → MATCH,selected proxy group”. This overrides subscription routing rules in the runtime configuration while preserving the subscription source and original script. “Follow subscription rules” (`遵循订阅规则`) retains subscription routing and does not guarantee that a particular website uses a proxy.
 
-Deselecting an application automatically synchronizes and removes its direct rules. With no applications selected, “Use proxy” still retains the default proxy rule. “Undo this tool's rules” (`撤销本工具规则`) removes the managed section, keeps application selections, and pauses automatic application. Click “Apply now” (`立即应用`) or change a routing selection to resume; helpers discovered by background scanning will not resume it automatically.
+Deselecting an application automatically synchronizes and removes its direct rules. With no applications or websites selected, “Use proxy” still retains the default proxy rule. “Undo this tool's rules” (`撤销本工具规则`) removes the managed section, keeps application and website selections, and pauses automatic application. Click “Apply now” (`立即应用`) or change a routing selection to resume; helpers discovered by background scanning will not resume it automatically.
 
 ## Scope and limitations
 
@@ -56,7 +58,7 @@ Deselecting an application automatically synchronizes and removes its direct rul
 
 ## Local data, backups, and undo
 
-Tauri's `app_data_dir` (application identifier `io.clashappbypass.app`) stores `settings.json`, `ownership.json`, and `backups/`. These contain executable paths and original extension scripts. The tool does not upload them; do not commit them to a public repository.
+Tauri's `app_data_dir` (application identifier `io.clashappbypass.app`) stores `settings.json`, `ownership.json`, and `backups/`. These contain executable paths, selected registrable domains, and original extension scripts. The tool does not upload them; do not commit them to a public repository.
 
 The original script is backed up before the first modification. Clash processes and source contents are checked before every write. External edits to the managed section or missing local ownership records stop modifications. Upgrades use the same data directory and management markers.
 
@@ -126,3 +128,15 @@ Tests cover synchronization, undo, status checks, association trust boundaries, 
 - Temporary application refresh, folder detection, and controller read failures retry with backoff and clear their temporary messages after recovery. A single read failure no longer permanently stops automatic checks.
 - Write or settings-save failures still pause automatic writes while read-only checks continue. Reconnecting does not resume rules explicitly undone by the user.
 - Windows network folder display retains its absolute path so saved folders remain recognizable on the next launch.
+
+## Website bypass (0.1.8)
+
+Paste an HTTP/HTTPS URL or domain into “Website bypass” (`网站直连`). Normalization happens locally without visiting the website. Paths, query parameters, and ports are not saved; only the normalized registrable domain is stored. For example, `https://news.example.com/article?q=1` becomes `example.com`, covering that domain, `news.example.com`, and deeper subdomains.
+
+The Public Suffix List determines the registrable domain, including compound suffixes such as `example.co.uk` and internationalized domains. Hosted platforms retain tenant boundaries: `docs.alice.github.io` becomes `alice.github.io`, never the entire `github.io`. Public suffixes, IP addresses, local domains, unrecognized suffixes, and URLs containing credentials are rejected.
+
+Adding or deleting a website saves and attempts to apply automatically. Reopening retains the saved list. Website selections work with application selections or independently. “Website rule loaded” means the core has loaded the matching direct rule in rule mode; it does not report observed website connections. Existing connections may retain their previous route, so visit the website to create new connections.
+
+Independent login, image, or CDN domains outside the selected domain must be added separately. Browser preview cannot normalize real URLs. The suffix list updates with the dependency version used at build time. Up to 200 websites may be saved.
+
+This feature has its own commit; see [CHANGELOG.md](CHANGELOG.md) for changes and validation. Revert the feature commit to roll back. The previous working commit is [`6abbe8d`](https://github.com/frank-zhi-0804/clash-app-bypass/commit/6abbe8d105318e14b1bed881373384bce2597aa5).

@@ -67,3 +67,21 @@ test('subscription-owned identical rules survive tool application', () => {
   const result = routed({ rules: input }, 'subscription');
   assert.deepEqual(Array.from(result.rules), [...rules, ...input]);
 });
+
+test('website-only routing precedes the proxy fallback without application rules', () => {
+  const websites = ['DOMAIN-SUFFIX,example.co.uk,DIRECT', 'DOMAIN-SUFFIX,example.com,DIRECT'];
+  const result = routed({ rules: ['MATCH,REJECT'] }, 'proxy', 'GLOBAL', websites);
+  assert.deepEqual(Array.from(result.rules), [...websites, 'MATCH,GLOBAL']);
+  assert.equal(result.mode, 'rule');
+});
+
+test('mixed website and application rules preserve subscription-owned website rules across rebuilds', () => {
+  const website = 'DOMAIN-SUFFIX,example.com,DIRECT';
+  const input = [website, 'DOMAIN-SUFFIX,unrelated.com,Proxy', 'MATCH,Proxy'];
+  const ctx = vm.createContext({ config: { rules: input } });
+  vm.runInContext('function main(c) { return c; }\n' + template.replace('__VERGE_DIRECT_RULES__', JSON.stringify([...rules, website])).replace('__VERGE_DIRECT_ROUTING__', JSON.stringify({ mode: 'subscription', proxyGroup: '' })), ctx);
+  for (let i = 0; i < 3; i++) {
+    const result = vm.runInContext('main(config)', ctx);
+    assert.deepEqual(Array.from(result.rules), [...rules, website, ...input]);
+  }
+});

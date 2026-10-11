@@ -5,6 +5,10 @@ pub const END: &str = "// </clash-app-bypass:managed:v1>";
 const WRAPPER: &str = include_str!("../../shared/managed-wrapper.js");
 
 pub fn make_block(paths: &[String], mode: &str, proxy_group: &str) -> Result<String, String> {
+    make_block_with_websites(paths, &[], mode, proxy_group)
+}
+
+pub fn make_block_with_websites(paths: &[String], websites: &[String], mode: &str, proxy_group: &str) -> Result<String, String> {
     if mode != "proxy" && mode != "subscription" { return Err("其他流量模式无效".into()); }
     if mode == "proxy" && (proxy_group.trim().is_empty() || proxy_group.chars().any(|c| matches!(c, ',' | '\n' | '\r')) || ["DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE"].contains(&proxy_group.to_uppercase().as_str())) {
         return Err("请选择有效的代理组，不能选择 DIRECT 或 REJECT".into());
@@ -16,7 +20,11 @@ pub fn make_block(paths: &[String], mode: &str, proxy_group: &str) -> Result<Str
         }
         rules.insert(format!("PROCESS-PATH,{path},DIRECT"));
     }
-    let json = serde_json::to_string(&rules).map_err(|e| e.to_string())?;
+    let mut ordered: Vec<String> = rules.into_iter().collect();
+    for domain in crate::websites::validate_saved(websites)? {
+        ordered.push(format!("DOMAIN-SUFFIX,{domain},DIRECT"));
+    }
+    let json = serde_json::to_string(&ordered).map_err(|e| e.to_string())?;
     let routing = serde_json::json!({ "mode": mode, "proxyGroup": proxy_group });
     Ok(format!("{BEGIN}\n{}\n{END}", WRAPPER.replace("__VERGE_DIRECT_RULES__", &json).replace("__VERGE_DIRECT_ROUTING__", &routing.to_string())))
 }
@@ -63,4 +71,11 @@ mod tests {
         assert!(split_managed(&format!("{BEGIN}\n{END}\nfunction other() {{}} ")).is_err());
     }
     #[test] fn refuses_immutable_main() { assert!(compose("const main = c => c;", "block").is_err()); }
+    #[test] fn website_rules_follow_app_rules_and_keep_distinct_private_tenants() {
+        let block = make_block_with_websites(&[r"C:\Apps\app.exe".into()], &["bob.github.io".into(), "example.com".into(), "alice.github.io".into(), "example.com".into()], "proxy", "GLOBAL").unwrap();
+        let (direct, _) = crate::live::block_rules(&block).unwrap();
+        assert_eq!(direct, vec![r"PROCESS-PATH,C:\Apps\app.exe,DIRECT", "DOMAIN-SUFFIX,alice.github.io,DIRECT", "DOMAIN-SUFFIX,bob.github.io,DIRECT", "DOMAIN-SUFFIX,example.com,DIRECT"]);
+        assert!(make_block_with_websites(&[], &["github.io".into()], "proxy", "GLOBAL").is_err());
+        assert!(make_block_with_websites(&[], &["news.example.com".into()], "subscription", "").is_err());
+    }
 }
