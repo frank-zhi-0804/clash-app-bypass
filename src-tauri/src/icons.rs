@@ -63,14 +63,14 @@ fn valid_png(icon: &str) -> bool {
 }
 
 #[tauri::command]
-pub async fn get_app_icons(requests: Vec<IconRequest>, refresh: Option<bool>, state: tauri::State<'_, IconCache>) -> HashMap<String, Option<String>> {
+pub async fn get_app_icons(requests: Vec<IconRequest>, refresh: Option<bool>, state: tauri::State<'_, IconCache>) -> super::Result<HashMap<String, Option<String>>> {
     let mut result: HashMap<String, Option<String>> = requests.iter().map(|r| (r.id.clone(), None)).collect();
     let cache = state.inner.clone();
     let (generation, missing) = {
         let mut inner = cache.lock().unwrap_or_else(|p| p.into_inner());
         if refresh.unwrap_or(false) { inner.clear(); }
         inner.prune();
-        if requests.len() > MAX_BATCH { return result; }
+        if requests.len() > MAX_BATCH { return Ok(result); }
         let mut missing = Vec::new();
         for request in requests {
             if !request.valid() { continue; }
@@ -79,7 +79,7 @@ pub async fn get_app_icons(requests: Vec<IconRequest>, refresh: Option<bool>, st
         }
         (inner.generation, missing)
     };
-    if missing.is_empty() { return result; }
+    if missing.is_empty() { return Ok(result); }
     let worker_requests = missing.clone();
     let extracted = tauri::async_runtime::spawn_blocking(move || {
         serde_json::to_string(&serde_json::json!({ "requests": worker_requests })).ok()
@@ -92,7 +92,7 @@ pub async fn get_app_icons(requests: Vec<IconRequest>, refresh: Option<bool>, st
         if inner.generation == generation { inner.insert(request.key(), icon.clone()); }
         result.insert(request.id, icon);
     }
-    result
+    Ok(result)
 }
 #[cfg(test)]
 mod tests {

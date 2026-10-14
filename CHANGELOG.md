@@ -7,6 +7,9 @@
 - App rows prefer native desktop shortcut icons, followed by Start Menu shortcuts and embedded EXE resources. Custom local ICOs, environment variables and positive/negative resource indices are supported; parameterized website and game entries do not supply custom logos to shared executables.
 - Visible and nearby rows load transparent 64×64 PNGs in bounded batches. Independent caches include failures; rescan refreshes them and ignores late results from old generations. Unreadable icons retain initial letters. Only verifiable local files are read, shortcuts are never executed, and image data is neither uploaded nor saved in settings. Optional shortcut paths remain compatible with old settings and binaries and do not affect routing fingerprints.
 
+- Windows 构建补正：异步 Tauri 命令按框架要求返回 Result；读取失败仍返回空图标，不影响选择和直连。
+- Windows build compatibility: the asynchronous Tauri command returns Result as required by the framework; extraction failures still resolve to empty icons.
+
 ### Validation / 验证
 
 - 本机通过 92/92 Node 回归、9 组扫描器测试、8 组原生图标测试及 TypeScript / Vite 构建。原生测试覆盖透明图标、自定义资源、环境变量、正负索引、损坏和缺失回退、桌面优先、路径边界、批次数限及 100 次读取的 USER/GDI 句柄释放。
