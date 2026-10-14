@@ -1,4 +1,5 @@
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 # $controller is supplied by the backend from the selected local configuration.
 function Read-ClashApi([string]$resource) {
@@ -12,20 +13,21 @@ function Read-ClashApi([string]$resource) {
     $clock = [Diagnostics.Stopwatch]::StartNew()
     while ($true) {
       $remaining = 4000 - [int]$clock.ElapsedMilliseconds
-      if ($remaining -le 0) { throw 'Clash 诊断接口读取超时' }
+      if ($remaining -le 0) { throw 'DIAGNOSTIC_TIMEOUT' }
       $read = $pipe.ReadAsync($buffer, 0, $buffer.Length)
-      if (-not $read.Wait($remaining)) { throw 'Clash 诊断接口读取超时' }
+      if (-not $read.Wait($remaining)) { throw 'DIAGNOSTIC_TIMEOUT' }
       $count = $read.Result
       if ($count -eq 0) { break }
       $output.Write($buffer, 0, $count)
-      if ($output.Length -gt 8388608) { throw 'Clash 诊断数据过大，请稍后重试' }
+      if ($output.Length -gt 8388608) { throw 'DIAGNOSTIC_TOO_LARGE' }
     }
     $response = [Text.Encoding]::UTF8.GetString($output.ToArray())
     $split = $response.IndexOf("`r`n`r`n")
-    if ($split -lt 0 -or $response -notmatch '^HTTP/1\.[01] 200 ') { throw 'Clash 诊断接口返回异常' }
+    if ($split -lt 0 -or $response -notmatch '^HTTP/1\.[01] 200 ') { throw 'DIAGNOSTIC_RESPONSE' }
     return ($response.Substring($split + 4) | ConvertFrom-Json)
   } finally { $pipe.Dispose(); $output.Dispose() }
 }
+try {
 $config = Read-ClashApi '/configs'
 $rules = Read-ClashApi '/rules'
 $connections = Read-ClashApi '/connections'
@@ -42,3 +44,10 @@ $snapshot = [ordered]@{
   })
 }
 ConvertTo-Json -InputObject $snapshot -Depth 5 -Compress
+
+} catch {
+  # Never include response bodies, subscriptions, secrets or script text in errors.
+  $code = [string]$_.Exception.Message
+  if ($code -notin @('DIAGNOSTIC_TIMEOUT', 'DIAGNOSTIC_TOO_LARGE', 'DIAGNOSTIC_RESPONSE')) { $code = 'DIAGNOSTIC_TRANSPORT' }
+  [Console]::Out.Write($code)
+}

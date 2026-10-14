@@ -1,3 +1,6 @@
+export type Language = 'zh-CN' | 'en';
+export interface UiMessage { key: string; values?: Record<string, unknown>; }
+export type DisplayMessage = UiMessage | string;
 export interface AppEntry {
   id: string;
   name: string;
@@ -7,17 +10,19 @@ export interface AppEntry {
   suggestedProcesses?: string[];
   source: string;
   warnings: string[];
+  sourceMessage?: UiMessage;
+  warningMessages?: UiMessage[];
   pathMissing?: boolean;
 }
 export interface AppliedState { revision?: number; fingerprint: string; pendingRestart: boolean; hasRules: boolean; }
-export interface Settings { selected: AppEntry[]; websites?: string[]; configDir: string; dark: boolean; otherTraffic: 'proxy' | 'subscription'; proxyGroup: string; applied?: AppliedState | null; }
+export interface Settings { selected: AppEntry[]; websites?: string[]; language?: Language; configDir: string; dark: boolean; otherTraffic: 'proxy' | 'subscription'; proxyGroup: string; applied?: AppliedState | null; }
 export interface NormalizedWebsite { host: string; domain: string; }
 export interface Integration {
   configDir: string;
   found: boolean;
   running: boolean;
   managed: boolean;
-  message: string;
+  message: DisplayMessage;
   proxyGroups: string[];
 }
-export interface OperationResult { message: string; ruleCount: number; pendingRestart?: boolean; }
+export interface OperationResult { message: DisplayMessage; ruleCount: number; pendingRestart?: boolean; }

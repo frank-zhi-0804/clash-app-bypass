@@ -1,32 +1,33 @@
+use crate::messages::UiMessage;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct ManagedRouting { pub mode: String, #[serde(rename = "proxyGroup")] pub proxy_group: String }
-pub fn block_rules(block: &str) -> Result<(Vec<String>, ManagedRouting), String> {
-    let assignment = |name: &str| -> Result<String, String> {
+pub fn block_rules(block: &str) -> Result<(Vec<String>, ManagedRouting), UiMessage> {
+    let assignment = |name: &str| -> Result<String, UiMessage> {
         let prefix = format!("    const {name} = ");
         block.lines().find_map(|line| line.strip_prefix(&prefix).and_then(|v| v.strip_suffix(';')).map(String::from))
-            .ok_or("无法识别旧版规则段，请先退出 Clash 后重新应用".into())
+            .ok_or(UiMessage::new("live.oldBlock"))
     };
-    Ok((serde_json::from_str(&assignment("directRules")?).map_err(|_| "旧规则格式异常")?,
-        serde_json::from_str(&assignment("routing")?).map_err(|_| "旧路由格式异常")?))
+    Ok((serde_json::from_str(&assignment("directRules")?).map_err(|e| UiMessage::detail("live.oldRulesFormat", e))?,
+        serde_json::from_str(&assignment("routing")?).map_err(|e| UiMessage::detail("live.oldRoutingFormat", e))?))
 }
-pub fn plan(original: &str, previous: Option<&str>, next: Option<&str>) -> Result<(String, Vec<String>, Vec<String>), String> {
-    let mut config: Value = serde_yaml::from_str(original).map_err(|_| "运行配置格式异常")?;
-    let old: Vec<String> = config.get("rules").and_then(Value::as_sequence).ok_or("运行配置缺少规则")?
-        .iter().map(|v| v.as_str().map(String::from).ok_or("运行规则格式异常")).collect::<Result<_, _>>()?;
+pub fn plan(original: &str, previous: Option<&str>, next: Option<&str>) -> Result<(String, Vec<String>, Vec<String>), UiMessage> {
+    let mut config: Value = serde_yaml::from_str(original).map_err(|e| UiMessage::detail("live.runtimeFormat", e))?;
+    let old: Vec<String> = config.get("rules").and_then(Value::as_sequence).ok_or(UiMessage::new("live.rulesMissing"))?
+        .iter().map(|v| v.as_str().map(String::from).ok_or(UiMessage::new("live.rulesFormat"))).collect::<Result<_, _>>()?;
     let mut base = old.clone();
     if let Some(block) = previous {
         let (owned, routing) = block_rules(block)?;
         if routing.mode == "proxy" {
             let mut expected = owned; expected.push(format!("MATCH,{}", routing.proxy_group));
-            if old != expected { return Err("Clash 运行规则已被其他配置更新，请刷新后重试；未覆盖其他规则".into()); }
+            if old != expected { return Err(UiMessage::new("live.externalRules")); }
             if next.map(block_rules).transpose()?.map(|(_, r)| r.mode != "proxy").unwrap_or(true) {
-                return Err("恢复订阅分流需要重新生成原配置，请退出 Clash 后应用这次选择".into());
+                return Err(UiMessage::new("live.subscriptionRestart"));
             }
         } else {
-            if !old.starts_with(&owned) { return Err("运行规则与本工具规则段不一致，已停止在线应用".into()); }
+            if !old.starts_with(&owned) { return Err(UiMessage::new("live.sectionMismatch")); }
             base = old[owned.len()..].to_vec();
         }
     }
@@ -38,10 +39,10 @@ pub fn plan(original: &str, previous: Option<&str>, next: Option<&str>) -> Resul
         else { direct.extend(base); }
         direct
     } else { base };
-    config["rules"] = serde_yaml::to_value(&rules).map_err(|e| e.to_string())?;
+    config["rules"] = serde_yaml::to_value(&rules).map_err(UiMessage::technical)?;
     config["find-process-mode"] = Value::String("always".into());
     config["mode"] = Value::String("rule".into());
-    Ok((serde_yaml::to_string(&config).map_err(|e| e.to_string())?, old, rules))
+    Ok((serde_yaml::to_string(&config).map_err(UiMessage::technical)?, old, rules))
 }
 
 #[cfg(test)]

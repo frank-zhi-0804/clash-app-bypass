@@ -38,18 +38,18 @@ test('theme, app labels, path case, and process ordering do not mark routing dir
 });
 
 test('status distinguishes saved choices, pending restart, written rules, edits, and undo', () => {
-  assert.equal(applicationStatus(settings, { ...integration, managed: false }).label, '未应用');
-  assert.equal(applicationStatus(settings, integration).label, '检测到已有规则');
+  assert.equal(applicationStatus(settings, { ...integration, managed: false }).label, 'status.unapplied.label');
+  assert.equal(applicationStatus(settings, integration).label, 'status.existing.label');
   const written = { ...settings, applied: { fingerprint: routingFingerprint(settings), hasRules: true, pendingRestart: true } };
-  assert.equal(applicationStatus(written, integration).label, '待重启 Clash');
+  assert.equal(applicationStatus(written, integration).label, 'status.restart.label');
   const restarted = { ...written, applied: { ...written.applied, pendingRestart: false } };
-  assert.equal(applicationStatus(restarted, { ...integration, running: true }).label, '规则已写入');
-  assert.equal(applicationStatus({ ...restarted, selected: [] }, integration).label, '未应用');
-  assert.equal(applicationStatus({ ...restarted, dark: true }, integration).label, '规则已写入');
+  assert.equal(applicationStatus(restarted, { ...integration, running: true }).label, 'status.written.label');
+  assert.equal(applicationStatus({ ...restarted, selected: [] }, integration).label, 'status.unapplied.label');
+  assert.equal(applicationStatus({ ...restarted, dark: true }, integration).label, 'status.written.label');
   const removed = { ...written, applied: { ...written.applied, hasRules: false } };
-  assert.match(applicationStatus(removed, { ...integration, managed: false }).message, /规则已撤销/);
-  assert.equal(applicationStatus({ ...removed, applied: { ...removed.applied, pendingRestart: false } }, { ...integration, managed: false }).label, '自动应用已暂停');
-  assert.equal(applicationStatus(written, integration, false).label, '浏览器演示');
+  assert.equal(applicationStatus(removed, { ...integration, managed: false }).message.key, 'status.restart.removed');
+  assert.equal(applicationStatus({ ...removed, applied: { ...removed.applied, pendingRestart: false } }, { ...integration, managed: false }).label, 'status.undone.label');
+  assert.equal(applicationStatus(written, integration, false).label, 'status.demo.label');
 });
 
 test('only a user routing change resumes automatic application after undo', () => {
@@ -77,9 +77,9 @@ test('integration is published before a slow software scan finishes', async () =
 });
 
 test('connection discovery and write suspension have distinct status messages', () => {
-  assert.equal(applicationStatus(settings, undefined, true, true).label, '正在自动连接');
-  assert.equal(applicationStatus(settings, integration, true, false, true).label, '自动写入已暂停');
-  assert.equal(applicationStatus(settings, { ...integration, managed: false }, true, false).label, '未应用');
+  assert.equal(applicationStatus(settings, undefined, true, true).label, 'status.connecting.label');
+  assert.equal(applicationStatus(settings, integration, true, false, true).label, 'status.writePaused.label');
+  assert.equal(applicationStatus(settings, { ...integration, managed: false }, true, false).label, 'status.unapplied.label');
 });
 
 test('reconnecting keeps automatic directories empty, undo intact, and dirty selections dirty', () => {

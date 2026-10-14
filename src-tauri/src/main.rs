@@ -3,91 +3,118 @@
 mod rules;
 mod live;
 mod websites;
+mod messages;
+use messages::UiMessage;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fs, io::Write, path::{Path, PathBuf}, process::{Command, Stdio}, sync::{Arc, Mutex}, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
 use tauri::Manager;
 
-type Result<T> = std::result::Result<T, String>;
+type Result<T> = std::result::Result<T, UiMessage>;
 struct OperationLock(Arc<Mutex<()>>);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AppEntry { id: String, name: String, path: String, running: bool, processes: Vec<String>, #[serde(default)] suggested_processes: Vec<String>, source: String, warnings: Vec<String>, #[serde(default)] path_missing: bool }
+struct AppEntry { id: String, name: String, path: String, running: bool, processes: Vec<String>, #[serde(default)] suggested_processes: Vec<String>, #[serde(default)] source: String, #[serde(default)] warnings: Vec<String>, #[serde(default, skip_serializing_if = "Option::is_none")] source_message: Option<UiMessage>, #[serde(default, skip_serializing_if = "Option::is_none")] warning_messages: Option<Vec<UiMessage>>, #[serde(default)] path_missing: bool }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AppliedState { #[serde(default)] revision: u32, fingerprint: String, pending_restart: bool, has_rules: bool }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Settings { #[serde(default)] selected: Vec<AppEntry>, #[serde(default)] websites: Vec<String>, #[serde(default)] config_dir: String, #[serde(default)] dark: bool, #[serde(default = "default_mode")] other_traffic: String, #[serde(default = "default_group")] proxy_group: String, #[serde(default)] applied: Option<AppliedState> }
+struct Settings { #[serde(default, deserialize_with = "deserialize_language", skip_serializing_if = "Option::is_none")] language: Option<String>, #[serde(default)] selected: Vec<AppEntry>, #[serde(default)] websites: Vec<String>, #[serde(default)] config_dir: String, #[serde(default)] dark: bool, #[serde(default = "default_mode")] other_traffic: String, #[serde(default = "default_group")] proxy_group: String, #[serde(default)] applied: Option<AppliedState> }
+fn normalize_language(value: Option<String>) -> Option<String> { value.map(|language| if language == "en" { "en".into() } else { "zh-CN".into() }) }
+fn deserialize_language<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Option<String>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    if value.is_null() { return Ok(None); }
+    Ok(Some(if value.as_str() == Some("en") { "en".into() } else { "zh-CN".into() }))
+}
+fn materialize_legacy_metadata(mut entry: AppEntry) -> AppEntry {
+    if let Some(message) = &entry.source_message { entry.source = message.legacy_text(); }
+    if let Some(messages) = &entry.warning_messages { entry.warnings = messages.iter().map(UiMessage::legacy_text).collect(); }
+    entry
+}
+fn add_warning(entry: &mut AppEntry, message: UiMessage) {
+    // Fresh scan metadata is authoritative. Preserve legacy warnings only when no
+    // descriptors are available, rather than guessing keys from old prose.
+    entry.warnings.push(message.legacy_text());
+    if let Some(messages) = &mut entry.warning_messages { messages.push(message); }
+}
+fn script_failure(output: &[u8], errors: &[u8]) -> UiMessage {
+    match String::from_utf8_lossy(output).trim() {
+        "SCAN_BATCH_JSON" => UiMessage::new("scanner.batchJson"),
+        "SCAN_BATCH_LIMIT" => UiMessage::new("scanner.batchLimit"),
+        "SCAN_BATCH_STRING" => UiMessage::new("scanner.batchString"),
+        _ => UiMessage::detail("script.failed", String::from_utf8_lossy(errors).trim()),
+    }
+}
 fn default_mode() -> String { "proxy".into() }
 fn default_group() -> String { "GLOBAL".into() }
 impl Default for Settings {
-    fn default() -> Self { Self { selected: vec![], websites: vec![], config_dir: String::new(), dark: false, other_traffic: default_mode(), proxy_group: default_group(), applied: None } }
+    fn default() -> Self { Self { language: None, selected: vec![], websites: vec![], config_dir: String::new(), dark: false, other_traffic: default_mode(), proxy_group: default_group(), applied: None } }
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Integration { config_dir: String, found: bool, running: bool, managed: bool, message: String, proxy_groups: Vec<String> }
+struct Integration { config_dir: String, found: bool, running: bool, managed: bool, message: UiMessage, proxy_groups: Vec<String> }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct OperationResult { message: String, rule_count: usize, pending_restart: bool }
+struct OperationResult { message: UiMessage, rule_count: usize, pending_restart: bool }
 #[derive(Serialize, Deserialize)]
 struct LiveJournal { script_path: PathBuf, runtime_path: PathBuf, old_script: String, new_script: String, old_runtime: String, new_runtime: String }
 fn pipe_controller(config: &serde_yaml::Value) -> Result<String> {
-    let pipe = config.get("external-controller-pipe").and_then(|v| v.as_str()).ok_or("未找到本机在线接口，请退出 Clash 后应用")?;
+    let pipe = config.get("external-controller-pipe").and_then(|v| v.as_str()).ok_or(UiMessage::new("live.pipeMissing"))?;
     let prefix = r"\\.\pipe\";
     if !pipe.starts_with(prefix) || pipe.len() <= prefix.len() || pipe[prefix.len()..].chars().any(|c| !c.is_ascii_alphanumeric() && !matches!(c, '-' | '_' | '.')) {
-        return Err("在线接口必须是本机命名管道".into());
+        return Err(UiMessage::new("live.pipeOnly"));
     }
     Ok(pipe.into())
 }
 fn live_api(packet: &serde_json::Value) -> Result<serde_json::Value> {
     powershell_input(include_str!("../scripts/live-api.ps1"), None, Some(&packet.to_string()))
         .and_then(|output| match output.trim() {
-            "LIVE_CONFLICT" => Err("运行规则或网络设置已变化，已停止覆盖；请刷新 Clash 配置后重试".into()),
-            "LIVE_UNSUPPORTED" => Err("当前规则结构不支持在线核对，请完全退出 Clash 后应用".into()),
-            "LIVE_INVALID" => Err("在线操作参数无效，已停止修改".into()),
-            "LIVE_TRANSPORT" => Err("无法连接或加载 Clash 在线接口，请检查 Clash 后重试".into()),
+            "LIVE_CONFLICT" => Err(UiMessage::new("live.conflict")),
+            "LIVE_UNSUPPORTED" => Err(UiMessage::new("live.unsupported")),
+            "LIVE_INVALID" => Err(UiMessage::new("live.invalid")),
+            "LIVE_TRANSPORT" => Err(UiMessage::new("live.transport")),
             _ => {
-                let value: serde_json::Value = serde_json::from_str(&output).map_err(|_| "在线操作未返回验证结果，已停止修改")?;
-                if value.get("verified").and_then(|v| v.as_bool()) == Some(true) { Ok(value) } else { Err("在线操作未返回验证结果，已停止修改".into()) }
+                let value: serde_json::Value = serde_json::from_str(&output).map_err(|_| UiMessage::new("live.unverified"))?;
+                if value.get("verified").and_then(|v| v.as_bool()) == Some(true) { Ok(value) } else { Err(UiMessage::new("live.unverified")) }
             },
-        }).map_err(|e: String| if e.starts_with("Windows 扫描失败") { "无法连接 Clash 在线接口，请检查 Clash 后重试".into() } else { e })
+        }).map_err(|e| if e.key.starts_with("backend:script.") { UiMessage::new("live.transport") } else { e })
 }
 #[derive(Default, Serialize, Deserialize)]
 struct Manifest { #[serde(default)] issued_blocks: BTreeMap<String, Vec<String>> }
 
 fn data_dir(app: &tauri::AppHandle) -> Result<PathBuf> {
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?; Ok(dir)
+    let dir = app.path().app_data_dir().map_err(UiMessage::technical)?;
+    fs::create_dir_all(&dir).map_err(UiMessage::technical)?; Ok(dir)
 }
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos();
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map_err(UiMessage::technical)?.as_nanos();
     let temp = path.with_extension(format!("vd-{}-{stamp}.tmp", std::process::id()));
     let result = (|| {
-        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temp).map_err(|e| e.to_string())?;
-        file.write_all(bytes).and_then(|_| file.sync_all()).map_err(|e| e.to_string())?;
-        drop(file); fs::rename(&temp, path).map_err(|e| e.to_string())
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temp).map_err(UiMessage::technical)?;
+        file.write_all(bytes).and_then(|_| file.sync_all()).map_err(UiMessage::technical)?;
+        drop(file); fs::rename(&temp, path).map_err(UiMessage::technical)
     })();
     if result.is_err() { let _ = fs::remove_file(&temp); } result
 }
 fn read_json<T: serde::de::DeserializeOwned + Default>(path: &Path) -> Result<T> {
     if !path.exists() { return Ok(T::default()); }
-    let data = fs::read(path).map_err(|e| e.to_string())?;
-    serde_json::from_slice(&data).map_err(|e| format!("无法读取本工具数据 {}：{e}", path.display()))
+    let data = fs::read(path).map_err(UiMessage::technical)?;
+    serde_json::from_slice(&data).map_err(|e| UiMessage::detail("data.read", e).with("path", path.display().to_string()))
 }
-fn write_json<T: Serialize>(path: &Path, data: &T) -> Result<()> { atomic_write(path, &serde_json::to_vec_pretty(data).map_err(|e| e.to_string())?) }
+fn write_json<T: Serialize>(path: &Path, data: &T) -> Result<()> { atomic_write(path, &serde_json::to_vec_pretty(data).map_err(UiMessage::technical)?) }
 
 fn powershell(script: &str, inspect: Option<&str>) -> Result<String> {
     powershell_input(script, inspect, None)
 }
 fn powershell_input(script: &str, inspect: Option<&str>, input: Option<&str>) -> Result<String> {
-    #[cfg(not(windows))] { let _ = (script, inspect, input); return Err("第一版仅支持 Windows".into()); }
+    #[cfg(not(windows))] { let _ = (script, inspect, input); return Err(UiMessage::new("platform.windowsOnly")); }
     #[cfg(windows)] {
         use std::os::windows::process::CommandExt;
         let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
-        let shell = PathBuf::from(std::env::var("WINDIR").map_err(|_| "无法找到 Windows 目录")?).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        let shell = PathBuf::from(std::env::var("WINDIR").map_err(|_| UiMessage::new("platform.windowsDirectory"))?).join("System32/WindowsPowerShell/v1.0/powershell.exe");
         let mut command = Command::new(shell);
         command.args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &STANDARD.encode(bytes)])
             .creation_flags(0x08000000).stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -97,35 +124,35 @@ fn powershell_input(script: &str, inspect: Option<&str>, input: Option<&str>) ->
             if path.starts_with('[') { command.env("VERGE_DIRECT_INSPECT_BATCH", path); }
             else { command.env("VERGE_DIRECT_INSPECT", path); }
         }
-        let mut child = command.spawn().map_err(|e| format!("无法启动 Windows 扫描：{e}"))?;
+        let mut child = command.spawn().map_err(|e| UiMessage::detail("script.start", e))?;
         if let Some(input) = input {
-            child.stdin.take().ok_or("无法传入本机配置")?.write_all(input.as_bytes()).map_err(|_| "无法传入本机配置")?;
+            child.stdin.take().ok_or(UiMessage::new("script.input"))?.write_all(input.as_bytes()).map_err(|_| UiMessage::new("script.input"))?;
         }
         // Drain pipes concurrently to avoid a full stdout pipe deadlocking large scans.
-        let stdout = child.stdout.take().ok_or("无法读取扫描输出")?;
-        let stderr = child.stderr.take().ok_or("无法读取扫描错误")?;
+        let stdout = child.stdout.take().ok_or(UiMessage::new("script.stdout"))?;
+        let stderr = child.stderr.take().ok_or(UiMessage::new("script.stderr"))?;
         let out = std::thread::spawn(move || { use std::io::Read; let mut bytes = Vec::new(); let mut stream = stdout; stream.read_to_end(&mut bytes).map(|_| bytes) });
         let err = std::thread::spawn(move || { use std::io::Read; let mut bytes = Vec::new(); let mut stream = stderr; stream.read_to_end(&mut bytes).map(|_| bytes) });
         let started = Instant::now();
         let status = loop {
-            match child.try_wait().map_err(|e| e.to_string())? { Some(s) => break s, None => {
-                if started.elapsed() > Duration::from_secs(75) { let _ = child.kill(); let _ = child.wait(); return Err("扫描超时，请重试或手动添加软件".into()); }
+            match child.try_wait().map_err(UiMessage::technical)? { Some(s) => break s, None => {
+                if started.elapsed() > Duration::from_secs(75) { let _ = child.kill(); let _ = child.wait(); return Err(UiMessage::new("script.timeout")); }
                 std::thread::sleep(Duration::from_millis(50));
             }}
         };
-        let output = out.join().map_err(|_| "扫描线程异常")?.map_err(|e| e.to_string())?;
-        let errors = err.join().map_err(|_| "扫描线程异常")?.map_err(|e| e.to_string())?;
-        if !status.success() { return Err(format!("Windows 扫描失败：{}", String::from_utf8_lossy(&errors).trim())); }
+        let output = out.join().map_err(|_| UiMessage::new("script.thread"))?.map_err(UiMessage::technical)?;
+        let errors = err.join().map_err(|_| UiMessage::new("script.thread"))?.map_err(UiMessage::technical)?;
+        if !status.success() { return Err(script_failure(&output, &errors)); }
         Ok(String::from_utf8_lossy(&output).trim_start_matches('\u{feff}').trim().into())
     }
 }
 fn scan(inspect: Option<&str>) -> Result<Vec<AppEntry>> {
     if let Some(path) = inspect {
         let path = Path::new(path);
-        if !path.is_absolute() || !path.is_file() || path.extension().and_then(|x| x.to_str()).map(|x| !x.eq_ignore_ascii_case("exe")).unwrap_or(true) { return Err("请选择存在的 .exe 程序文件".into()); }
+        if !path.is_absolute() || !path.is_file() || path.extension().and_then(|x| x.to_str()).map(|x| !x.eq_ignore_ascii_case("exe")).unwrap_or(true) { return Err(UiMessage::new("scanner.exeRequired")); }
     }
     let output = powershell(include_str!("../scripts/scan.ps1"), inspect)?;
-    serde_json::from_str(&output).map_err(|e| format!("无法解析扫描结果：{e}"))
+    serde_json::from_str::<Vec<AppEntry>>(&output).map(|entries| entries.into_iter().map(materialize_legacy_metadata).collect()).map_err(|e| UiMessage::detail("scanner.parse", e))
 }
 
 fn reconcile_entry(previous: &AppEntry, mut live: AppEntry) -> AppEntry {
@@ -139,7 +166,7 @@ fn reconcile_entry(previous: &AppEntry, mut live: AppEntry) -> AppEntry {
     live.suggested_processes.retain(|path| !live.processes.iter().any(|p| p.eq_ignore_ascii_case(path)));
     live.name = previous.name.clone();
     live.path_missing = false;
-    if removed > 0 { live.warnings.push(format!("已清理 {removed} 个失效的辅助程序路径，当前选择需重新应用")); }
+    if removed > 0 { add_warning(&mut live, UiMessage::new("scanner.helpersRemoved").with("count", removed as u64)); }
     live
 }
 
@@ -147,20 +174,21 @@ fn refresh_entries(apps: Vec<AppEntry>) -> Result<Vec<AppEntry>> {
     let paths: Vec<&str> = apps.iter().filter(|entry| Path::new(&entry.path).is_file()).map(|entry| entry.path.as_str()).collect();
     let mut refreshed = BTreeMap::new();
     for batch in paths.chunks(64) {
-        let inspect = serde_json::to_string(batch).map_err(|e| e.to_string())?;
+        let inspect = serde_json::to_string(batch).map_err(UiMessage::technical)?;
         let output = powershell(include_str!("../scripts/scan.ps1"), Some(&inspect))?;
-        let live: Vec<AppEntry> = serde_json::from_str(&output).map_err(|e| format!("无法解析刷新结果：{e}"))?;
-        refreshed.extend(live.into_iter().map(|entry| (entry.path.to_lowercase(), entry)));
+        let live: Vec<AppEntry> = serde_json::from_str(&output).map_err(|e| UiMessage::detail("scanner.refreshParse", e))?;
+        refreshed.extend(live.into_iter().map(materialize_legacy_metadata).map(|entry| (entry.path.to_lowercase(), entry)));
     }
     apps.into_iter().map(|previous| {
         if !Path::new(&previous.path).is_file() {
             let mut missing = previous;
             missing.path_missing = true;
             missing.running = false;
-            missing.warnings = vec!["主程序路径已失效。请取消选择，再添加新的程序文件".into()];
+            missing.warning_messages = Some(vec![UiMessage::new("scanner.mainMissing")]);
+            missing = materialize_legacy_metadata(missing);
             return Ok(missing);
         }
-        let live = refreshed.get(&previous.path.to_lowercase()).cloned().ok_or("无法识别所选程序，请重新添加")?;
+        let live = refreshed.get(&previous.path.to_lowercase()).cloned().ok_or(UiMessage::new("scanner.selectedUnknown"))?;
         Ok(reconcile_entry(&previous, live))
     }).collect()
 }
@@ -170,10 +198,10 @@ fn clash_running() -> Result<bool> {
 }
 fn config_dir(input: &str) -> Result<PathBuf> {
     let dir = if input.trim().is_empty() {
-        PathBuf::from(std::env::var("APPDATA").map_err(|_| "无法检测 APPDATA")?).join("io.github.clash-verge-rev.clash-verge-rev")
+        PathBuf::from(std::env::var("APPDATA").map_err(|_| UiMessage::new("config.appData"))?).join("io.github.clash-verge-rev.clash-verge-rev")
     } else { PathBuf::from(input.trim()) };
-    if !dir.is_absolute() || !dir.join("profiles.yaml").is_file() { return Err("未找到 profiles.yaml，请在设置中选择 Clash Verge Rev 配置目录".into()); }
-    fs::canonicalize(&dir).map_err(|e| format!("无法访问 Clash 配置目录：{e}"))
+    if !dir.is_absolute() || !dir.join("profiles.yaml").is_file() { return Err(UiMessage::new("config.profilesMissing")); }
+    fs::canonicalize(&dir).map_err(|e| UiMessage::detail("config.access", e))
 }
 fn display_config_path(path: &Path) -> String {
     let text = path.to_string_lossy();
@@ -190,36 +218,42 @@ fn display_config_path(path: &Path) -> String {
     text.into_owned()
 }
 fn script_path(dir: &Path) -> Result<PathBuf> {
-    let profiles: serde_yaml::Value = serde_yaml::from_slice(&fs::read(dir.join("profiles.yaml")).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    let items = profiles.get("items").and_then(|v| v.as_sequence()).ok_or("profiles.yaml 没有有效的 items 清单")?;
-    let item = items.iter().find(|v| v.get("uid").and_then(|x| x.as_str()) == Some("Script")).ok_or("找不到全局扩展脚本 Script，请先在 Clash 中创建全局扩展脚本")?;
-    if item.get("type").and_then(|v| v.as_str()) != Some("script") { return Err("全局 Script 配置类型异常".into()); }
-    let file = item.get("file").and_then(|v| v.as_str()).ok_or("全局脚本缺少文件名")?;
-    if file.chars().any(|c| matches!(c, '/' | '\\')) || !file.ends_with(".js") { return Err("全局脚本文件路径不受支持".into()); }
-    let path = fs::canonicalize(dir.join("profiles").join(file)).map_err(|e| format!("无法读取全局扩展脚本：{e}"))?;
-    if !path.starts_with(dir) { return Err("全局脚本指向配置目录之外，第一版不支持此结构".into()); }
+    let profiles: serde_yaml::Value = serde_yaml::from_slice(&fs::read(dir.join("profiles.yaml")).map_err(UiMessage::technical)?).map_err(UiMessage::technical)?;
+    let items = profiles.get("items").and_then(|v| v.as_sequence()).ok_or(UiMessage::new("config.items"))?;
+    let item = items.iter().find(|v| v.get("uid").and_then(|x| x.as_str()) == Some("Script")).ok_or(UiMessage::new("config.scriptMissing"))?;
+    if item.get("type").and_then(|v| v.as_str()) != Some("script") { return Err(UiMessage::new("config.scriptType")); }
+    let file = item.get("file").and_then(|v| v.as_str()).ok_or(UiMessage::new("config.scriptFilename"))?;
+    if file.chars().any(|c| matches!(c, '/' | '\\')) || !file.ends_with(".js") { return Err(UiMessage::new("config.scriptPath")); }
+    let path = fs::canonicalize(dir.join("profiles").join(file)).map_err(|e| UiMessage::detail("config.scriptRead", e))?;
+    if !path.starts_with(dir) { return Err(UiMessage::new("config.scriptOutside")); }
     Ok(path)
 }
-fn original_script(path: &Path) -> Result<String> { fs::read_to_string(path).map_err(|e| format!("无法读取原脚本：{e}")) }
+fn original_script(path: &Path) -> Result<String> { fs::read_to_string(path).map_err(|e| UiMessage::detail("config.originalRead", e)) }
 #[tauri::command]
 async fn diagnose_routing(config_dir: String) -> Result<serde_json::Value> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = self::config_dir(&config_dir)?;
-        let bytes = fs::read(dir.join("clash-verge.yaml")).map_err(|_| "无法读取 Clash 运行配置，请先启动 Clash")?;
-        let config: serde_yaml::Value = serde_yaml::from_slice(&bytes).map_err(|_| "Clash 运行配置格式异常")?;
-        let pipe = config.get("external-controller-pipe").and_then(|v| v.as_str()).ok_or("未找到本机命名管道诊断接口；暂时无法验证实际连接")?;
+        let bytes = fs::read(dir.join("clash-verge.yaml")).map_err(|e| UiMessage::detail("diagnostic.runtimeRead", e))?;
+        let config: serde_yaml::Value = serde_yaml::from_slice(&bytes).map_err(|e| UiMessage::detail("diagnostic.runtimeFormat", e))?;
+        let pipe = config.get("external-controller-pipe").and_then(|v| v.as_str()).ok_or(UiMessage::new("diagnostic.pipeMissing"))?;
         let prefix = r"\\.\pipe\";
         if !pipe.starts_with(prefix) || pipe.len() <= prefix.len() || pipe[prefix.len()..].chars().any(|c| !c.is_ascii_alphanumeric() && !matches!(c, '-' | '_' | '.')) {
-            return Err("诊断接口必须是本机命名管道，未修改 Clash 配置".into());
+            return Err(UiMessage::new("diagnostic.pipeOnly"));
         }
         let script = format!("$controller = '{}'\n{}", pipe, include_str!("../scripts/diagnose.ps1"));
-        let output = powershell(&script, None).map_err(|_| "无法读取 Clash 实际连接，请确认 Clash 已启动且允许访问本机诊断接口".to_string())?;
-        serde_json::from_str(&output).map_err(|_| "无法解析 Clash 连接诊断结果".into())
-    }).await.map_err(|e| e.to_string())?
+        let output = powershell(&script, None).map_err(|_| UiMessage::new("diagnostic.read"))?;
+        match output.trim() {
+            "DIAGNOSTIC_TIMEOUT" => Err(UiMessage::new("diagnostic.timeout")),
+            "DIAGNOSTIC_TOO_LARGE" => Err(UiMessage::new("diagnostic.tooLarge")),
+            "DIAGNOSTIC_RESPONSE" => Err(UiMessage::new("diagnostic.response")),
+            "DIAGNOSTIC_TRANSPORT" => Err(UiMessage::new("diagnostic.read")),
+            _ => serde_json::from_str(&output).map_err(|e| UiMessage::detail("diagnostic.parse", e)),
+        }
+    }).await.map_err(UiMessage::technical)?
 }
 fn verify_ownership(manifest: &Manifest, key: &str, current: &Option<String>) -> Result<()> {
     if let Some(block) = current {
-        if !manifest.issued_blocks.get(key).map(|v| v.contains(block)).unwrap_or(false) { return Err("本工具规则段被外部修改或缺少本机记录，已停止写入。请从备份检查恢复".into()); }
+        if !manifest.issued_blocks.get(key).map(|v| v.contains(block)).unwrap_or(false) { return Err(UiMessage::new("rules.ownership")); }
     } Ok(())
 }
 fn proxy_groups(dir: &Path) -> Vec<String> {
@@ -239,22 +273,22 @@ fn proxy_groups(dir: &Path) -> Vec<String> {
 }
 fn modify_rules(app: &tauri::AppHandle, apps: &[AppEntry], websites: &[String], input: &str, remove: bool, mode: &str, group: &str) -> Result<OperationResult> {
     let data = data_dir(app)?;
-    let lock = fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(data.join("operation.lock")).map_err(|e| e.to_string())?;
-    lock.try_lock_exclusive().map_err(|_| "另一个直连助手正在修改规则，请稍后重试")?;
+    let lock = fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(data.join("operation.lock")).map_err(UiMessage::technical)?;
+    lock.try_lock_exclusive().map_err(|_| UiMessage::new("rules.otherInstance"))?;
     let running = clash_running()?;
     let dir = config_dir(input)?; let path = script_path(&dir)?;
     let journal_path = data.join("pending-live.json");
     if journal_path.exists() {
-        if running { return Err("上次在线操作中断，请完全退出 Clash 后应用一次以恢复".into()); }
-        let journal: LiveJournal = serde_json::from_slice(&fs::read(&journal_path).map_err(|e| e.to_string())?).map_err(|_| "恢复记录格式异常")?;
-        if journal.script_path != path || journal.runtime_path != dir.join("clash-verge.yaml") { return Err("恢复记录对应另一份配置，请先检查".into()); }
+        if running { return Err(UiMessage::new("recovery.interrupted")); }
+        let journal: LiveJournal = serde_json::from_slice(&fs::read(&journal_path).map_err(UiMessage::technical)?).map_err(|e| UiMessage::detail("recovery.format", e))?;
+        if journal.script_path != path || journal.runtime_path != dir.join("clash-verge.yaml") { return Err(UiMessage::new("recovery.otherConfig")); }
         for (file, old, new) in [(&journal.script_path, &journal.old_script, &journal.new_script), (&journal.runtime_path, &journal.old_runtime, &journal.new_runtime)] {
             let current = original_script(file)?;
-            if current != *old && current != *new { return Err("恢复文件已被其他程序修改，已保留现场".into()); }
+            if current != *old && current != *new { return Err(UiMessage::new("recovery.externallyChanged")); }
         }
         atomic_write(&path, journal.old_script.as_bytes())?;
         atomic_write(&journal.runtime_path, journal.old_runtime.as_bytes())?;
-        fs::remove_file(&journal_path).map_err(|e| e.to_string())?;
+        fs::remove_file(&journal_path).map_err(UiMessage::technical)?;
     }
     let source = original_script(&path)?;
     let (base, current) = rules::split_managed(&source)?;
@@ -264,38 +298,38 @@ fn modify_rules(app: &tauri::AppHandle, apps: &[AppEntry], websites: &[String], 
     let paths: Vec<String> = apps.iter().flat_map(|a| a.processes.clone()).collect();
     let sites = websites::validate_saved(websites)?;
     let remove = remove || (paths.is_empty() && sites.is_empty() && mode == "subscription");
-    if remove && current.is_none() { return Ok(OperationResult { message: "当前没有本工具规则，无需撤销".into(), rule_count: 0, pending_restart: false }); }
+    if remove && current.is_none() { return Ok(OperationResult { message: UiMessage::new("rules.nothingToRemove"), rule_count: 0, pending_restart: false }); }
     if !remove && mode == "proxy" && !proxy_groups(&dir).iter().any(|name| name == group) {
-        return Err("所选代理组已不存在，请刷新订阅后重新检测并选择代理组".into());
+        return Err(UiMessage::new("rules.groupMissing"));
     }
     let block = if remove { None } else { Some(rules::make_block_with_websites(&paths, &sites, mode, group)?) };
     if !remove {
         for app in apps {
-            if !Path::new(&app.path).is_file() { return Err(format!("主程序路径已失效，请取消选择并重新添加：{}", app.path)); }
+            if !Path::new(&app.path).is_file() { return Err(UiMessage::new("rules.mainMissing").with("path", app.path.clone())); }
         }
         // Revalidate every executable before generating rules; never silently apply stale paths.
-        for path in &paths { if !Path::new(path).is_file() { return Err(format!("程序路径已失效，请重新扫描或取消选择：{path}")); } }
+        for path in &paths { if !Path::new(path).is_file() { return Err(UiMessage::new("rules.helperMissing").with("path", path.clone())); } }
     }
     let new_source = match &block { Some(b) => rules::compose(&source, b)?, None => base };
     let runtime_path = dir.join("clash-verge.yaml");
     let online = if running {
         let old_runtime = original_script(&runtime_path)?;
         let (new_runtime, previous_rules, next_rules) = live::plan(&old_runtime, current.as_deref(), block.as_deref())?;
-        let general: serde_yaml::Value = serde_yaml::from_str(&old_runtime).map_err(|_| "运行配置格式异常")?;
+        let general: serde_yaml::Value = serde_yaml::from_str(&old_runtime).map_err(|e| UiMessage::detail("live.runtimeFormat", e))?;
         let controller = pipe_controller(&general)?;
         let mut packet = serde_json::json!({"action":"preflight", "controller":controller, "general":general, "previousRules":previous_rules, "nextRules":next_rules, "payload":new_runtime});
         let preflight = live_api(&packet)?;
-        let previous = preflight.get("previousRouting").ok_or("在线预检未返回原路由状态")?;
+        let previous = preflight.get("previousRouting").ok_or(UiMessage::new("live.previousRouting"))?;
         packet["expectedRouting"] = previous.clone();
         let mut restore_general = general.clone();
-        restore_general["mode"] = serde_yaml::Value::String(previous.get("mode").and_then(|v| v.as_str()).ok_or("原路由模式无法核对")?.into());
-        restore_general["find-process-mode"] = serde_yaml::Value::String(previous.get("findProcessMode").and_then(|v| v.as_str()).ok_or("原进程识别状态无法核对")?.into());
-        packet["restorePayload"] = serde_json::json!(serde_yaml::to_string(&restore_general).map_err(|_| "无法准备恢复配置")?);
-        packet["restoreGeneral"] = serde_json::to_value(&restore_general).map_err(|_| "无法准备恢复配置")?;
+        restore_general["mode"] = serde_yaml::Value::String(previous.get("mode").and_then(|v| v.as_str()).ok_or(UiMessage::new("live.previousMode"))?.into());
+        restore_general["find-process-mode"] = serde_yaml::Value::String(previous.get("findProcessMode").and_then(|v| v.as_str()).ok_or(UiMessage::new("live.previousProcessMode"))?.into());
+        packet["restorePayload"] = serde_json::json!(serde_yaml::to_string(&restore_general).map_err(|e| UiMessage::detail("recovery.prepare", e))?);
+        packet["restoreGeneral"] = serde_json::to_value(&restore_general).map_err(|e| UiMessage::detail("recovery.prepare", e))?;
         Some((old_runtime, new_runtime, packet))
     } else { None };
-    let backups = data.join("backups"); fs::create_dir_all(&backups).map_err(|e| e.to_string())?;
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos();
+    let backups = data.join("backups"); fs::create_dir_all(&backups).map_err(UiMessage::technical)?;
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map_err(UiMessage::technical)?.as_nanos();
     atomic_write(&backups.join(format!("Script-{stamp}.js")), source.as_bytes())?;
     if let Some(block) = &block {
         let issued = manifest.issued_blocks.entry(key).or_default();
@@ -304,9 +338,9 @@ fn modify_rules(app: &tauri::AppHandle, apps: &[AppEntry], websites: &[String], 
         write_json(&manifest_path, &manifest)?;
     }
     // Optimistic concurrency guard against another editor or a newly restarted Clash instance.
-    if clash_running()? != running || original_script(&path)? != source { return Err("Clash 状态或脚本在操作期间变化，已停止应用，请重试".into()); }
+    if clash_running()? != running || original_script(&path)? != source { return Err(UiMessage::new("rules.stateChanged")); }
     if let Some((old_runtime, new_runtime, mut packet)) = online {
-        if original_script(&runtime_path)? != old_runtime { return Err("运行配置已被其他程序修改，请重试".into()); }
+        if original_script(&runtime_path)? != old_runtime { return Err(UiMessage::new("rules.runtimeChanged")); }
         let journal = LiveJournal { script_path: path.clone(), runtime_path: runtime_path.clone(), old_script: source.clone(), new_script: new_source.clone(), old_runtime: old_runtime.clone(), new_runtime: new_runtime.clone() };
         write_json(&journal_path, &journal)?;
         atomic_write(&backups.join(format!("Runtime-{stamp}.yaml")), old_runtime.as_bytes())?;
@@ -315,65 +349,65 @@ fn modify_rules(app: &tauri::AppHandle, apps: &[AppEntry], websites: &[String], 
             atomic_write(&path, new_source.as_bytes())?;
             atomic_write(&runtime_path, new_runtime.as_bytes())?;
             live_api(&packet)?;
-            if original_script(&path)? != new_source || original_script(&runtime_path)? != new_runtime { return Err("其他程序在应用期间更新了配置".into()); }
-            Ok::<(), String>(())
+            if original_script(&path)? != new_source || original_script(&runtime_path)? != new_runtime { return Err(UiMessage::new("rules.changedDuringApply")); }
+            Ok::<(), UiMessage>(())
         })();
         if let Err(error) = result {
             let script_now = original_script(&path)?; let runtime_now = original_script(&runtime_path)?;
-            if (script_now != source && script_now != new_source) || (runtime_now != old_runtime && runtime_now != new_runtime) { return Err(format!("{error}；发现外部修改，未覆盖配置，请先退出 Clash 检查恢复记录")); }
+            if (script_now != source && script_now != new_source) || (runtime_now != old_runtime && runtime_now != new_runtime) { return Err(UiMessage::cause("recovery.external", error)); }
             atomic_write(&path, source.as_bytes())?;
             atomic_write(&runtime_path, old_runtime.as_bytes())?;
-            let restore = serde_json::json!({"action":"restore", "controller":packet["controller"], "payload":packet["restorePayload"], "previousRules":packet["nextRules"], "nextRules":packet["previousRules"], "general":packet["restoreGeneral"], "previousGeneral":serde_yaml::from_str::<serde_yaml::Value>(&journal.new_runtime).map_err(|_| "恢复配置格式异常")?});
-            if live_api(&restore).is_err() { return Err(format!("{error}；文件已恢复，内核状态无法确认，请退出 Clash 后重试")); }
-            fs::remove_file(&journal_path).map_err(|e| e.to_string())?;
-            return Err(format!("{error}；已恢复原配置和规则"));
+            let restore = serde_json::json!({"action":"restore", "controller":packet["controller"], "payload":packet["restorePayload"], "previousRules":packet["nextRules"], "nextRules":packet["previousRules"], "general":packet["restoreGeneral"], "previousGeneral":serde_yaml::from_str::<serde_yaml::Value>(&journal.new_runtime).map_err(|e| UiMessage::detail("recovery.configFormat", e))?});
+            if live_api(&restore).is_err() { return Err(UiMessage::cause("recovery.unverified", error)); }
+            fs::remove_file(&journal_path).map_err(UiMessage::technical)?;
+            return Err(UiMessage::cause("recovery.restored", error));
         }
-        fs::remove_file(&journal_path).map_err(|e| e.to_string())?;
+        fs::remove_file(&journal_path).map_err(UiMessage::technical)?;
     } else { atomic_write(&path, new_source.as_bytes())?; }
     let rule_count = if remove { 0 } else { paths.into_iter().collect::<std::collections::BTreeSet<_>>().len() + sites.len() };
-    Ok(OperationResult { message: if running { format!("已保存并在线应用 {rule_count} 条规则，新连接已可使用规则模式；无需退出 Clash") } else { format!("已保存 {rule_count} 条规则，下次启动 Clash 后生效") }, rule_count, pending_restart: !running })
+    Ok(OperationResult { message: if running { UiMessage::new("rules.appliedOnline").with("count", rule_count as u64) } else { UiMessage::new("rules.savedOffline").with("count", rule_count as u64) }, rule_count, pending_restart: !running })
 }
 
 #[tauri::command]
 fn load_settings(app: tauri::AppHandle) -> Result<Settings> { read_json(&data_dir(&app)?.join("settings.json")) }
 #[tauri::command]
-fn save_settings(app: tauri::AppHandle, mut settings: Settings) -> Result<()> { settings.websites = websites::validate_saved(&settings.websites)?; write_json(&data_dir(&app)?.join("settings.json"), &settings) }
+fn save_settings(app: tauri::AppHandle, mut settings: Settings) -> Result<()> { settings.language = normalize_language(settings.language); settings.websites = websites::validate_saved(&settings.websites)?; write_json(&data_dir(&app)?.join("settings.json"), &settings) }
 #[tauri::command]
 fn normalize_website(input: String) -> Result<websites::NormalizedWebsite> { websites::normalize(&input) }
 #[tauri::command]
-async fn scan_apps() -> Result<Vec<AppEntry>> { tauri::async_runtime::spawn_blocking(|| scan(None)).await.map_err(|e| e.to_string())? }
+async fn scan_apps() -> Result<Vec<AppEntry>> { tauri::async_runtime::spawn_blocking(|| scan(None)).await.map_err(UiMessage::technical)? }
 #[tauri::command]
-async fn inspect_app(path: String) -> Result<AppEntry> { tauri::async_runtime::spawn_blocking(move || scan(Some(&path))?.into_iter().next().ok_or("无法识别这个程序".into())).await.map_err(|e| e.to_string())? }
+async fn inspect_app(path: String) -> Result<AppEntry> { tauri::async_runtime::spawn_blocking(move || scan(Some(&path))?.into_iter().next().ok_or(UiMessage::new("scanner.appUnknown"))).await.map_err(UiMessage::technical)? }
 #[tauri::command]
-async fn refresh_selected(apps: Vec<AppEntry>) -> Result<Vec<AppEntry>> { tauri::async_runtime::spawn_blocking(move || refresh_entries(apps)).await.map_err(|e| e.to_string())? }
+async fn refresh_selected(apps: Vec<AppEntry>) -> Result<Vec<AppEntry>> { tauri::async_runtime::spawn_blocking(move || refresh_entries(apps)).await.map_err(UiMessage::technical)? }
 #[tauri::command]
 async fn inspect_integration(config_dir: String) -> Result<Integration> {
     tauri::async_runtime::spawn_blocking(move || {
         let running = clash_running()?;
         match self::config_dir(&config_dir).and_then(|dir| script_path(&dir).map(|path| (dir, path))) {
             Ok((dir, path)) => { let (_, block) = rules::split_managed(&original_script(&path)?)?;
-                Ok(Integration { proxy_groups: proxy_groups(&dir), config_dir: display_config_path(&dir), found: true, running, managed: block.is_some(), message: if running { "已连接 Clash，支持自动保存和在线应用；旧连接不会被强制断开".into() } else { "已连接 Clash 配置目录，选择会自动保存规则，下次启动 Clash 后生效".into() } })
+                Ok(Integration { proxy_groups: proxy_groups(&dir), config_dir: display_config_path(&dir), found: true, running, managed: block.is_some(), message: if running { UiMessage::new("integration.online") } else { UiMessage::new("integration.offline") } })
             }
             Err(e) => Ok(Integration { config_dir, found: false, running, managed: false, message: e, proxy_groups: vec!["GLOBAL".into()] })
         }
-    }).await.map_err(|e| e.to_string())?
+    }).await.map_err(UiMessage::technical)?
 }
 #[tauri::command]
 async fn apply_rules(app: tauri::AppHandle, state: tauri::State<'_, OperationLock>, apps: Vec<AppEntry>, websites: Option<Vec<String>>, config_dir: String, other_traffic: String, proxy_group: String) -> Result<OperationResult> {
     // A non-blocking guard avoids overlapping requests within one process.
     let lock = state.0.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let _guard = lock.try_lock().map_err(|_| "操作正在进行，请稍后重试")?;
+        let _guard = lock.try_lock().map_err(|_| UiMessage::new("operation.busy"))?;
         modify_rules(&app, &apps, &websites.unwrap_or_default(), &config_dir, false, &other_traffic, &proxy_group)
-    }).await.map_err(|e| e.to_string())?
+    }).await.map_err(UiMessage::technical)?
 }
 #[tauri::command]
 async fn remove_rules(app: tauri::AppHandle, state: tauri::State<'_, OperationLock>, config_dir: String) -> Result<OperationResult> {
     let lock = state.0.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let _guard = lock.try_lock().map_err(|_| "操作正在进行，请稍后重试")?;
+        let _guard = lock.try_lock().map_err(|_| UiMessage::new("operation.busy"))?;
         modify_rules(&app, &[], &[], &config_dir, true, "subscription", "")
-    }).await.map_err(|e| e.to_string())?
+    }).await.map_err(UiMessage::technical)?
 }
 fn main() {
     tauri::Builder::default()
@@ -381,7 +415,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(OperationLock(Arc::new(Mutex::new(()))))
         .invoke_handler(tauri::generate_handler![load_settings, save_settings, normalize_website, scan_apps, inspect_app, refresh_selected, inspect_integration, apply_rules, remove_rules, diagnose_routing])
-        .run(tauri::generate_context!()).expect("无法启动直连助手");
+        .run(tauri::generate_context!()).expect("Unable to start Clash App Bypass");
 }
 
 #[cfg(test)]
@@ -410,19 +444,19 @@ mod tests {
         for path in [&main, &helper, &fresh] { fs::write(path, b"fixture").unwrap(); }
         let old = AppEntry { id: "app".into(), name: "Friendly name".into(), path: main.to_string_lossy().into(), running: false,
             processes: vec![main.to_string_lossy().into(), helper.to_string_lossy().into(), dir.join("removed.exe").to_string_lossy().into()],
-            suggested_processes: vec![], source: "test".into(), warnings: vec![], path_missing: false };
+            suggested_processes: vec![], source: "test".into(), warnings: vec![], source_message: None, warning_messages: Some(vec![]), path_missing: false };
         let live = AppEntry { processes: vec![main.to_string_lossy().into(), fresh.to_string_lossy().into()], name: "Filename".into(), ..old.clone() };
         let updated = reconcile_entry(&old, live);
         assert_eq!(updated.processes.len(), 3);
         assert!(updated.processes.contains(&helper.to_string_lossy().into_owned()));
         assert!(updated.processes.contains(&fresh.to_string_lossy().into_owned()));
         assert_eq!(updated.name, "Friendly name");
-        assert!(updated.warnings.iter().any(|warning| warning.contains("1 个失效")));
+        assert!(updated.warning_messages.as_ref().unwrap().iter().any(|warning| warning.key == "backend:scanner.helpersRemoved" && warning.values["count"] == 1));
         fs::remove_file(&main).unwrap();
         let missing = refresh_entries(vec![updated]).unwrap();
         assert!(missing[0].path_missing);
         assert!(!missing[0].running);
-        assert!(missing[0].warnings[0].contains("主程序路径已失效"));
+        assert_eq!(missing[0].warning_messages.as_ref().unwrap()[0].key, "backend:scanner.mainMissing");
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
@@ -434,6 +468,53 @@ mod tests {
         assert!(old.websites.is_empty());
         assert_eq!(old.other_traffic, "proxy");
         assert_eq!(old.proxy_group, "GLOBAL");
+    }
+
+    #[test]
+    fn language_is_optional_safe_and_does_not_change_routing_data() {
+        let old: Settings = serde_json::from_str(r#"{"selected":[],"websites":["example.com"],"otherTraffic":"subscription","proxyGroup":"User Group","applied":{"revision":3,"fingerprint":"working","pendingRestart":false,"hasRules":true}}"#).unwrap();
+        assert_eq!(old.language, None);
+        let before = serde_json::to_value(&old).unwrap();
+        let mut changed = old.clone(); changed.language = Some("en".into());
+        let mut after = serde_json::to_value(&changed).unwrap();
+        assert_eq!(after["language"], "en");
+        after.as_object_mut().unwrap().remove("language");
+        assert_eq!(before, after);
+        for value in [serde_json::json!("fr"), serde_json::json!("EN"), serde_json::json!(42), serde_json::json!([]), serde_json::json!({})] {
+            let data = serde_json::json!({"language":value});
+            let settings: Settings = serde_json::from_value(data).unwrap();
+            assert_eq!(settings.language.as_deref(), Some("zh-CN"));
+            assert_eq!(settings.other_traffic, "proxy");
+        }
+        let empty: Settings = serde_json::from_value(serde_json::json!({"language":null})).unwrap();
+        assert_eq!(empty.language, None);
+        assert_eq!(normalize_language(Some("unknown".into())).as_deref(), Some("zh-CN"));
+        assert_eq!(normalize_language(Some("en".into())).as_deref(), Some("en"));
+    }
+    #[test]
+    fn metadata_sidecars_are_readable_by_old_settings_shape() {
+        let old_json = serde_json::json!({"id":"user", "name":"User supplied name", "path":r"C:\User\app.exe", "running":false, "processes":[r"C:\User\app.exe"], "source":"user label", "warnings":["user warning"]});
+        let old: AppEntry = serde_json::from_value(old_json.clone()).unwrap();
+        assert!(old.source_message.is_none()); assert!(old.warning_messages.is_none());
+        assert_eq!(serde_json::to_value(&old).unwrap()["warnings"], old_json["warnings"]);
+        let entry = materialize_legacy_metadata(AppEntry { source_message: Some(UiMessage::new("scanner.source.manual")), warning_messages: Some(vec![UiMessage::new("scanner.associationHelp")]), ..old });
+        let value = serde_json::to_value(&entry).unwrap();
+        #[derive(Deserialize)] struct LegacyEntry { source: String, warnings: Vec<String>, name: String, path: String, processes: Vec<String> }
+        let legacy: LegacyEntry = serde_json::from_value(value).unwrap();
+        assert_eq!(legacy.source, entry.source);
+        assert_eq!(legacy.warnings, entry.warnings);
+        assert_eq!(legacy.name, "User supplied name");
+        assert_eq!(legacy.path, r"C:\User\app.exe");
+        assert_eq!(legacy.processes, vec![r"C:\User\app.exe"]);
+    }
+    #[test]
+    fn script_failure_reads_only_explicit_stable_codes() {
+        let known = script_failure(b"SCAN_BATCH_LIMIT", b"script text or private details");
+        assert_eq!(known.key, "backend:scanner.batchLimit");
+        assert!(known.values.is_empty());
+        let native = script_failure(b"", b"access denied");
+        assert_eq!(native.key, "backend:script.failed");
+        assert_eq!(native.values["detail"], "access denied");
     }
     #[test]
     fn external_edits_require_manual_review() {

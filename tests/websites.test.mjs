@@ -36,10 +36,10 @@ test('website ordering and duplicates do not make routing dirty', () => {
   assert.notEqual(routingFingerprint(base()), routingFingerprint(base({ websites: ['example.org'] })));
 });
 test('website status requires rule mode and the exact root rule to be loaded', () => {
-  assert.equal(websiteRuleStatus('example.com').label, '等待检查');
-  assert.equal(websiteRuleStatus('example.com', snapshot({ mode: 'global', domainRules: ['example.com'] })).label, '等待规则模式');
-  assert.equal(websiteRuleStatus('example.com', snapshot({ domainRules: ['EXAMPLE.COM'] })).label, '网站规则已加载');
-  assert.equal(websiteRuleStatus('example.com', snapshot({ domainRules: ['other.example.com'] })).label, '网站规则尚未加载');
+  assert.equal(websiteRuleStatus('example.com').label, 'website.status.waiting');
+  assert.equal(websiteRuleStatus('example.com', snapshot({ mode: 'global', domainRules: ['example.com'] })).label, 'website.status.ruleMode');
+  assert.equal(websiteRuleStatus('example.com', snapshot({ domainRules: ['EXAMPLE.COM'] })).label, 'website.status.loaded');
+  assert.equal(websiteRuleStatus('example.com', snapshot({ domainRules: ['other.example.com'] })).label, 'website.status.notLoaded');
 });
 test('a website-only selection writes domain rules and saves applied state', async () => {
   const f = fixture(); const result = await synchronize(base(), f.services);

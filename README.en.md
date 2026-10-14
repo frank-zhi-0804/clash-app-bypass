@@ -4,9 +4,11 @@
 
 [中文](README.md) | **English**
 
-A Windows application and website bypass assistant for Clash Verge Rev. Select applications that should connect directly, or paste a website address to bypass its registrable domain and subdomains. This is an independent third-party project, unaffiliated with Clash Verge Rev. Current source version: **0.1.8**. The application interface is currently in Chinese.
+A Windows application and website bypass assistant for Clash Verge Rev. Select applications that should connect directly, or paste a website address to bypass its registrable domain and subdomains. This is an independent third-party project, unaffiliated with Clash Verge Rev. Current source version: **0.1.9**. The interface supports Chinese and English.
 
 ## Features
+
+- Switch instantly between Chinese and English, with the preference saved locally. Existing settings retain Chinese.
 
 - Paste a URL or subdomain to normalize its registrable domain, then apply `DOMAIN-SUFFIX,...,DIRECT` to that domain and all subdomains. Adding or removing websites saves and synchronizes automatically.
 - VALORANT WeGame launchers associate the game executables, login launcher, and known network helpers within the same installation, covering executable paths outside the launcher directory.
@@ -140,3 +142,11 @@ Adding or deleting a website saves and attempts to apply automatically. Reopenin
 Independent login, image, or CDN domains outside the selected domain must be added separately. Browser preview cannot normalize real URLs. The suffix list updates with the dependency version used at build time. Up to 200 websites may be saved.
 
 This feature has its own commit; see [CHANGELOG.md](CHANGELOG.md) for changes and validation. Revert the feature commit to roll back. The previous working commit is [`6abbe8d`](https://github.com/frank-zhi-0804/clash-app-bypass/commit/6abbe8d105318e14b1bed881373384bce2597aa5).
+
+## Interface language (0.1.9)
+
+Choose “中文” or “English” at the top of the window or in Settings. Interface text, operation messages, and the window title switch immediately; reopening restores the saved choice. Upgrading starts in Chinese when no preference exists. Application names, file paths, proxy group names, and original system error details remain unchanged.
+
+Language is a display preference: it does not change bypass selections, routing fingerprints, or the automatic-application pause after undo. A failed preference save prompts a retry. Language selection is temporarily disabled during routing operations to prevent concurrent settings overwrites.
+
+Translations are bundled locally with i18next and do not use an online translation service. See the [localization maintenance guide](docs/localization.md) for resource and message conventions.

@@ -1,6 +1,6 @@
 {
   "name": "clash-app-bypass",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "private": true,
   "description": "A Windows application and website bypass assistant for Clash Verge Rev",
   "type": "module",
@@ -20,8 +20,10 @@
     "@mui/material": "^7.3.0",
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-dialog": "^2.4.0",
+    "i18next": "^26.4.4",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "react-i18next": "^17.0.16"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.8.0",

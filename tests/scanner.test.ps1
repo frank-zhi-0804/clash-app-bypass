@@ -25,6 +25,9 @@ try {
   $result = Invoke-Expression $scanSource | ConvertFrom-Json
   if (@($result).Count -ne 1) { throw 'Expected exactly one inspected application' }
   if (-not $result.running) { throw 'Running main application was not detected' }
+  if ($result.sourceMessage.key -cne 'backend:scanner.source.manual') { throw 'Missing stable manual source descriptor' }
+  if (@($result.warningMessages | Where-Object { $_.key -ceq 'backend:scanner.associationHelp' }).Count -ne 1) { throw 'Missing stable scanner warning descriptor' }
+  foreach ($message in @($result.sourceMessage) + @($result.warningMessages)) { if (-not $message.key.StartsWith('backend:scanner.')) { throw 'Scanner metadata contains an unstable descriptor' } }
   if ($result.processes -notcontains $helperPath) { throw 'Known helper was not discovered on disk' }
   if ($result.processes -contains $unrelatedPath) { throw 'Unrelated executable was associated' }
   if ($result.processes -contains $externalPath) { throw 'External shared helper was associated' }

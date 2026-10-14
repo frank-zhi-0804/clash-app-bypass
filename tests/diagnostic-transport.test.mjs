@@ -261,3 +261,28 @@ test('successful reload must also enable process lookup, not just rule mode', { 
     assert.equal(writes, 1);
   } finally { await close(server); }
 });
+
+
+test('diagnostic failures expose stable safe codes without response bodies or subscription secrets', { skip: process.platform !== 'win32' }, async () => {
+  const server = liveServer((req, res) => { res.writeHead(400); res.end('secret-subscription-response'); });
+  await listen(server);
+  try {
+    const source = `$controller='${server.testPipe}'\n${fs.readFileSync(new URL('../src-tauri/scripts/diagnose.ps1', import.meta.url), 'utf8')}`;
+    const { stdout, stderr } = await promisify(execFile)('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(source, 'utf16le').toString('base64')], { timeout: 15000, windowsHide: true });
+    assert.equal(stdout.trim(), 'DIAGNOSTIC_RESPONSE');
+    assert.equal(stderr.trim(), '');
+    assert.ok(!stdout.includes('secret-'));
+  } finally { await close(server); }
+});
+
+test('malformed diagnostic JSON returns a safe transport code rather than raw private input', { skip: process.platform !== 'win32' }, async () => {
+  const server = liveServer((req, res) => { res.setHeader('Content-Type', 'application/json'); res.end('{"secret":"private-value"'); });
+  await listen(server);
+  try {
+    const source = `$controller='${server.testPipe}'\n${fs.readFileSync(new URL('../src-tauri/scripts/diagnose.ps1', import.meta.url), 'utf8')}`;
+    const { stdout, stderr } = await promisify(execFile)('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(source, 'utf16le').toString('base64')], { timeout: 15000, windowsHide: true });
+    assert.equal(stdout.trim(), 'DIAGNOSTIC_TRANSPORT');
+    assert.equal(stderr.trim(), '');
+    assert.ok(!stdout.includes('private-value'));
+  } finally { await close(server); }
+});

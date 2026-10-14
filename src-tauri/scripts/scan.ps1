@@ -54,6 +54,7 @@ function Get-ValorantPaths([string]$path) {
     $root = [IO.Path]::GetDirectoryName($root)
   }
 }
+function New-UiMessage([string]$key) { return [ordered]@{ key = 'backend:' + $key } }
 function Add-App([string]$path, [string]$name, [string]$source) {
   if (-not $path -or -not $path.EndsWith('.exe', [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { return }
   try { $full = [IO.Path]::GetFullPath($path) } catch { return }
@@ -62,37 +63,37 @@ function Add-App([string]$path, [string]$name, [string]$source) {
   if ($entries.ContainsKey($id)) { return }
   if (-not $name) { $name = Get-Product $full }
   if (-not $name) { $name = [IO.Path]::GetFileNameWithoutExtension($full) }
-  $entries[$id] = [ordered]@{ id = $id; name = $name; path = $full; running = $false; processes = @($full); suggestedProcesses = @(); source = $source; warnings = @() }
+  $entries[$id] = [ordered]@{ id = $id; name = $name; path = $full; running = $false; processes = @($full); suggestedProcesses = @(); source = ''; warnings = @(); sourceMessage = (New-UiMessage $source); warningMessages = @() }
 }
 $isInspection = [bool]($env:VERGE_DIRECT_INSPECT_BATCH -or $env:VERGE_DIRECT_INSPECT)
 if ($env:VERGE_DIRECT_INSPECT_BATCH) {
   $batch = $env:VERGE_DIRECT_INSPECT_BATCH.Trim()
-  if (-not $batch.StartsWith('[') -or -not $batch.EndsWith(']')) { throw '批量程序路径必须是 JSON 数组' }
+  if (-not $batch.StartsWith('[') -or -not $batch.EndsWith(']')) { Write-Output 'SCAN_BATCH_JSON'; throw 'SCAN_BATCH_JSON' }
   $paths = ConvertFrom-Json -InputObject $batch
-  if ($paths.Count -gt 128) { throw '一次最多扫描 128 个程序' }
+  if ($paths.Count -gt 128) { Write-Output 'SCAN_BATCH_LIMIT'; throw 'SCAN_BATCH_LIMIT' }
   foreach ($path in $paths) {
-    if ($path -isnot [string]) { throw '程序路径必须是字符串' }
-    Add-App $path '' '手动添加'
+    if ($path -isnot [string]) { Write-Output 'SCAN_BATCH_STRING'; throw 'SCAN_BATCH_STRING' }
+    Add-App $path '' 'scanner.source.manual'
   }
 } elseif ($env:VERGE_DIRECT_INSPECT) {
-  Add-App $env:VERGE_DIRECT_INSPECT '' '手动添加'
+  Add-App $env:VERGE_DIRECT_INSPECT '' 'scanner.source.manual'
 } else {
   $shell = New-Object -ComObject WScript.Shell
   $roots = @([Environment]::GetFolderPath('StartMenu'), [Environment]::GetFolderPath('CommonStartMenu'), [Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('CommonDesktopDirectory')) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique
   foreach ($root in $roots) {
     foreach ($link in @(Get-ChildItem -LiteralPath $root -Filter '*.lnk' -Recurse -File -ErrorAction SilentlyContinue)) {
-      try { $shortcut = $shell.CreateShortcut($link.FullName); Add-App $shortcut.TargetPath $link.BaseName '快捷方式' } catch {}
+      try { $shortcut = $shell.CreateShortcut($link.FullName); Add-App $shortcut.TargetPath $link.BaseName 'scanner.source.shortcut' } catch {}
     }
   }
   # Running executables without a shortcut remain available as process entries.
-  foreach ($proc in $processes) { Add-App $proc.ExecutablePath '' '运行进程' }
+  foreach ($proc in $processes) { Add-App $proc.ExecutablePath '' 'scanner.source.running' }
 }
 foreach ($entry in $entries.Values) {
   $entry.running = @($processes | Where-Object { $_.ExecutablePath -ieq $entry.path }).Count -gt 0
   $appRoot = [IO.Path]::GetDirectoryName($entry.path)
   $rootPrefix = $appRoot.TrimEnd('\') + '\'
   $genericRoots = @($env:USERPROFILE, $env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA, $env:APPDATA, [IO.Path]::GetPathRoot($appRoot), (Join-Path $env:USERPROFILE 'Downloads'), [Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('MyDocuments'))
-  if ($genericRoots -icontains $appRoot) { $entry.warnings += '程序位于公共目录，仅关联主程序。建议选择安装目录内的程序。'; continue }
+  if ($genericRoots -icontains $appRoot) { $entry.warningMessages += (New-UiMessage 'scanner.sharedDirectory'); continue }
   $product = Get-Product $entry.path
   $helperNames = @()
   $helperRelativePaths = @()
@@ -123,7 +124,7 @@ foreach ($entry in $entries.Values) {
     $directoryCache[$appRoot] = @{ Paths = $diskPaths; Limited = $visited -ge 2000 }
     }
     $candidates += $directoryCache[$appRoot].Paths
-    if ($directoryCache[$appRoot].Limited) { $entry.warnings += '程序目录较大，扫描达到上限。未识别的辅助程序可单独添加。' }
+    if ($directoryCache[$appRoot].Limited) { $entry.warningMessages += (New-UiMessage 'scanner.directoryLimit') }
   }
   $linkedCandidate = $false
   foreach ($candidate in @($candidates | Select-Object -Unique)) {
@@ -136,12 +137,12 @@ foreach ($entry in $entries.Values) {
     if (-not $isRelated -and $product) { $isRelated = (Get-Product $candidate) -ieq $product }
     if ($isRelated) { $entry.processes += $candidate }
   }
-  if ($linkedCandidate) { $entry.warnings += '已跳过目录链接中的辅助程序，避免关联其他安装目录。' }
+  if ($linkedCandidate) { $entry.warningMessages += (New-UiMessage 'scanner.directoryLink') }
   $entry.processes = @($entry.processes | Select-Object -Unique)
   $valorantPaths = @(Get-ValorantPaths $entry.path)
   if ($valorantPaths.Count -gt 0) {
     $entry.processes = @(@($entry.processes + $valorantPaths) | Select-Object -Unique)
-    $entry.warnings += '已按无畏契约安装结构关联游戏主程序和登录辅助程序。'
+    $entry.warningMessages += (New-UiMessage 'scanner.valorant')
   }
   # A launcher may start another product outside its directory. Offer those paths
   # for review instead of silently bypassing every app launched by Steam/browsers.
@@ -171,8 +172,8 @@ foreach ($entry in $entries.Values) {
   }
   $entry.suggestedProcesses = @($entry.suggestedProcesses | Select-Object -Unique)
   $entry.running = @($processes | Where-Object { $entry.processes -icontains $_.ExecutablePath }).Count -gt 0
-  if ($entry.suggestedProcesses.Count -gt 0) { $entry.warnings += '发现启动链中的其他程序，请检查候选关联程序；确认后自动应用规则。' }
-  if (@($inventory | Where-Object { $relatedIds.ContainsKey([string]$_.ProcessId) -and -not $_.ExecutablePath }).Count -gt 0) { $entry.warnings += '部分关联进程路径无法读取，关联清单可能不完整。' }
-  $entry.warnings += '自动关联同产品信息或已知辅助进程；启动链候选需要确认，未识别的共享服务可单独添加。'
+  if ($entry.suggestedProcesses.Count -gt 0) { $entry.warningMessages += (New-UiMessage 'scanner.candidates') }
+  if (@($inventory | Where-Object { $relatedIds.ContainsKey([string]$_.ProcessId) -and -not $_.ExecutablePath }).Count -gt 0) { $entry.warningMessages += (New-UiMessage 'scanner.unreadable') }
+  $entry.warningMessages += (New-UiMessage 'scanner.associationHelp')
 }
 ConvertTo-Json -InputObject @($entries.Values | Sort-Object name) -Depth 5 -Compress

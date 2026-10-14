@@ -1,3 +1,4 @@
+use crate::messages::UiMessage;
 use std::collections::BTreeSet;
 use serde::Serialize;
 use url::{Host, Url};
@@ -8,13 +9,13 @@ pub struct NormalizedWebsite {
     pub domain: String,
 }
 
-pub fn normalize(input: &str) -> Result<NormalizedWebsite, String> {
+pub fn normalize(input: &str) -> Result<NormalizedWebsite, UiMessage> {
     let input = input.trim();
     if input.is_empty() || input.chars().count() > 8192 {
-        return Err("请输入网站域名或不超过 8192 字符的网址".into());
+        return Err(UiMessage::new("website.inputLength"));
     }
     if input.chars().any(|c| c.is_control() || c.is_whitespace() || c == '\\') {
-        return Err("网址不能包含空白、反斜杠或控制字符".into());
+        return Err(UiMessage::new("website.characters"));
     }
     let explicit_scheme = input.split_once("://").map(|(scheme, _)| {
         let mut bytes = scheme.bytes();
@@ -26,47 +27,47 @@ pub fn normalize(input: &str) -> Result<NormalizedWebsite, String> {
     } else if explicit_scheme {
         input.to_string()
     } else {
-        if input.starts_with('/') { return Err("请输入完整网址或网站域名".into()); }
+        if input.starts_with('/') { return Err(UiMessage::new("website.address")); }
         format!("https://{input}")
     };
-    let parsed = Url::parse(&address).map_err(|_| "无法识别网址，请检查域名格式")?;
+    let parsed = Url::parse(&address).map_err(|e| UiMessage::detail("website.parse", e))?;
     if !matches!(parsed.scheme(), "http" | "https") {
-        return Err("只支持 HTTP 或 HTTPS 网站".into());
+        return Err(UiMessage::new("website.scheme"));
     }
     let authority = address.split_once("://").map(|(_, rest)| rest.split(['/', '?', '#']).next().unwrap_or("")).unwrap_or("");
-    if authority.is_empty() { return Err("请输入完整网址或网站域名".into()); }
+    if authority.is_empty() { return Err(UiMessage::new("website.address")); }
     if !parsed.username().is_empty() || parsed.password().is_some() || authority.contains('@') {
-        return Err("请移除网址中的用户名或密码后再添加".into());
+        return Err(UiMessage::new("website.credentials"));
     }
     let host = match parsed.host() {
         Some(Host::Domain(host)) => host.strip_suffix('.').unwrap_or(host).to_string(),
-        _ => return Err("请使用网站域名，不能使用 IP 地址".into()),
+        _ => return Err(UiMessage::new("website.ip")),
     };
     if host.len() > 253 || host.split('.').any(|label| {
         label.is_empty() || label.len() > 63 || label.starts_with('-') || label.ends_with('-')
             || !label.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
     }) {
-        return Err("网站域名格式无效".into());
+        return Err(UiMessage::new("website.domain"));
     }
     // The static PSL includes ICANN and PRIVATE entries. A hosting provider's
     // suffix is a tenant boundary, never a site-wide bypass target.
-    let registered = psl::domain(host.as_bytes()).ok_or("请添加具体网站，不能添加公共域名后缀")?;
+    let registered = psl::domain(host.as_bytes()).ok_or(UiMessage::new("website.publicSuffix"))?;
     if !registered.suffix().is_known() {
-        return Err("无法确认此网站的公共后缀，请使用有效的互联网网站域名".into());
+        return Err(UiMessage::new("website.unknownSuffix"));
     }
-    let domain = std::str::from_utf8(registered.trim().as_bytes()).map_err(|_| "网站域名格式无效")?.to_string();
+    let domain = std::str::from_utf8(registered.trim().as_bytes()).map_err(|_| UiMessage::new("website.domain"))?.to_string();
     Ok(NormalizedWebsite { host, domain })
 }
 
-pub fn validate_saved(websites: &[String]) -> Result<Vec<String>, String> {
-    if websites.len() > 200 { return Err("最多可添加 200 个网站".into()); }
+pub fn validate_saved(websites: &[String]) -> Result<Vec<String>, UiMessage> {
+    if websites.len() > 200 { return Err(UiMessage::new("website.limit")); }
     let mut domains = BTreeSet::new();
     for value in websites {
         let normalized = normalize(value)?;
         // Saved settings and direct apply calls must not expand a manually edited
         // subdomain or URL. Only the explicit normalization command expands input.
         if normalized.host != *value || normalized.domain != *value {
-            return Err("网站清单必须是已整理的主域名，请通过添加网站重新整理".into());
+            return Err(UiMessage::new("website.canonical"));
         }
         domains.insert(value.clone());
     }

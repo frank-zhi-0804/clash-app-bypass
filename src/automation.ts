@@ -1,3 +1,5 @@
+import { uiMessage, messageFromError } from './messages.ts';
+import type { DisplayMessage } from './types.ts';
 import { routingFingerprint } from './workflow.ts';
 import type { AppEntry, Integration, OperationResult, Settings } from './types.ts';
 import type { RoutingSnapshot } from './routingDiagnostics.ts';
@@ -5,13 +7,15 @@ import { websiteDomains } from './websites.ts';
 export const ROUTING_REVISION = 3;
 export type SynchronizationPhase = 'refresh' | 'integration' | 'diagnose' | 'selection' | 'apply' | 'save';
 export class SynchronizationFailure extends Error {
+  readonly uiMessage: DisplayMessage;
   readonly pausesWrites: boolean;
   readonly phase: SynchronizationPhase;
   readonly integration?: Integration;
   readonly settings?: Settings;
   readonly ruleWriteCompleted: boolean;
   constructor(phase: SynchronizationPhase, error: unknown, integration?: Integration, settings?: Settings, ruleWriteCompleted = false) {
-    super(error instanceof Error ? error.message : String(error));
+    super(error instanceof Error ? error.message : typeof error === 'string' ? error : 'Synchronization failed');
+    this.uiMessage = messageFromError(error);
     this.name = 'SynchronizationFailure';
     this.phase = phase; this.integration = integration; this.settings = settings;
     this.ruleWriteCompleted = ruleWriteCompleted;
@@ -47,14 +51,14 @@ export async function synchronize(settings: Settings, services: AutomationServic
   try { snapshot = integration.running ? await services.diagnose(next.configDir) : undefined; }
   catch (error) { throw new SynchronizationFailure('diagnose', error, integration); }
   const missing = next.selected.filter(a => a.pathMissing);
-  if (options.allowWrites !== false && missing.length) throw new SynchronizationFailure('selection', `程序路径已失效，请重新选择：${missing.map(a => a.name).join('、')}`, integration);
+  if (options.allowWrites !== false && missing.length) throw new SynchronizationFailure('selection', uiMessage('error.selectionMissing', { names: missing.map(a => a.name).join(', ') }), integration);
   const fingerprint = routingFingerprint(next);
   const dirty = fingerprint !== next.applied?.fingerprint || next.applied?.revision !== ROUTING_REVISION;
   const websites = websiteDomains(next.websites);
   const rules = new Set(snapshot?.rules.map(p => p.toLowerCase()));
   const domainRules = new Set(snapshot?.domainRules?.map(domain => domain.toLowerCase()));
   const incomplete = snapshot && (snapshot.mode !== 'rule' || (next.selected.length > 0 && snapshot.findProcessMode && snapshot.findProcessMode !== 'always') || next.selected.some(a => a.processes.some(p => !rules.has(p.toLowerCase()))) || websites.some(domain => !domainRules.has(domain)));
-  let message = '';
+  let message: DisplayMessage = '';
   let ruleWriteCompleted = false;
   const suspended = next.applied?.hasRules === false;
   // Do not enable proxy fallback on a fresh install before the user chooses an app.
@@ -76,10 +80,10 @@ export async function synchronize(settings: Settings, services: AutomationServic
     catch (error) { throw new SynchronizationFailure('save', error, integration, next, ruleWriteCompleted); }
   }
   let diagnostics = snapshot;
-  let diagnosticError = '';
+  let diagnosticError: DisplayMessage = '';
   if (message && integration.running) {
     try { diagnostics = await services.diagnose(next.configDir); }
-    catch (error) { diagnostics = undefined; diagnosticError = `规则操作已完成，但连接检查失败：${String(error)}`; }
+    catch (error) { diagnostics = undefined; diagnosticError = uiMessage('error.followupDiagnostics', { error: messageFromError(error) }); }
   }
   return { settings: next, integration, diagnostics, diagnosticError, message };
 }

@@ -72,7 +72,8 @@ test('a connection check failure after a successful write preserves the applied 
   assert.equal(result.settings.applied.hasRules, true);
   assert.equal(result.message, 'applied');
   assert.equal(result.diagnostics, undefined);
-  assert.match(result.diagnosticError, /规则操作已完成.*temporarily unavailable/);
+  assert.equal(result.diagnosticError.key, 'error.followupDiagnostics');
+  assert.equal(result.diagnosticError.values.error.key, 'error.unknown');
 });
 
 test('pending removal clears only after previously owned path rules are absent', async () => {

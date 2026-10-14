@@ -6,9 +6,9 @@ export function websiteDomains(values: string[] = []): string[] {
 }
 
 export function websiteRuleStatus(domain: string, snapshot?: RoutingSnapshot) {
-  if (!snapshot) return { label: '等待检查', severity: 'info' as const };
-  if (snapshot.mode !== 'rule') return { label: '等待规则模式', severity: 'warning' as const };
+  if (!snapshot) return { label: 'website.status.waiting', severity: 'info' as const };
+  if (snapshot.mode !== 'rule') return { label: 'website.status.ruleMode', severity: 'warning' as const };
   return snapshot.domainRules?.some(loaded => loaded.toLowerCase() === domain.toLowerCase())
-    ? { label: '网站规则已加载', severity: 'success' as const }
-    : { label: '网站规则尚未加载', severity: 'warning' as const };
+    ? { label: 'website.status.loaded', severity: 'success' as const }
+    : { label: 'website.status.notLoaded', severity: 'warning' as const };
 }
