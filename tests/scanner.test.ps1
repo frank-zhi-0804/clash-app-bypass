@@ -32,6 +32,18 @@ try {
   if ($result.processes -contains $unrelatedPath) { throw 'Unrelated executable was associated' }
   if ($result.processes -contains $externalPath) { throw 'External shared helper was associated' }
   Write-Output 'PASS: application selection, known helpers, unrelated files and external helpers'
+  $startHint = Join-Path $testRoot 'start-menu.lnk'
+  $desktopHint = Join-Path $testRoot 'desktop.lnk'
+  foreach ($hint in @($startHint, $desktopHint)) { [IO.File]::WriteAllText($hint, 'shortcut metadata fixture') }
+  Add-App $mainPath '' 'scanner.source.shortcut' $startHint 1
+  Add-App $mainPath '' 'scanner.source.shortcut' $desktopHint 3
+  Add-App $mainPath '' 'scanner.source.shortcut' $startHint 1
+  Add-App $mainPath '' 'scanner.source.running'
+  if ($entries[$mainPath.ToLowerInvariant()].iconShortcut -cne $desktopHint) { throw 'Desktop icon hint was overwritten by lower-priority sources' }
+  Add-App $mainPath '' 'scanner.source.shortcut' (Join-Path $testRoot 'missing.lnk') 4
+  if ($entries[$mainPath.ToLowerInvariant()].iconShortcut -cne $desktopHint) { throw 'Missing shortcut replaced the valid icon hint' }
+  Write-Output 'PASS: desktop icon hint priority, running-process preservation and missing hint fallback'
+
   foreach ($case in @(
     @{ Main = 'QQ.exe'; Helper = 'QQEX.exe'; Unrelated = 'other.exe' },
     @{ Main = 'wegame.exe'; Helper = 'qbblinktrial\browser.exe'; Unrelated = 'Other\browser.exe' }

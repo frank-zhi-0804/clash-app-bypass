@@ -1,5 +1,23 @@
 # Changelog / 更新记录
 
+## 0.1.10 — 2026-10-14
+
+- 软件列表优先显示桌面快捷方式的真实图标，其次是开始菜单和 EXE 内置图标。支持自定义本地 ICO、环境变量和正负资源索引；带参数的网页或游戏入口不会把专用图标套到共用程序上。
+- 可见及邻近条目批量读取 64×64 透明 PNG，独立内存缓存包含失败结果。重新扫描刷新缓存，旧请求不会覆盖新结果；读取失败保留首字兜底。仅访问可验证的本地文件，不执行快捷方式，不上传图标，不把图像数据写入设置。可选快捷方式路径兼容旧设置与旧版回滚，不参与分流指纹。
+- App rows prefer native desktop shortcut icons, followed by Start Menu shortcuts and embedded EXE resources. Custom local ICOs, environment variables and positive/negative resource indices are supported; parameterized website and game entries do not supply custom logos to shared executables.
+- Visible and nearby rows load transparent 64×64 PNGs in bounded batches. Independent caches include failures; rescan refreshes them and ignores late results from old generations. Unreadable icons retain initial letters. Only verifiable local files are read, shortcuts are never executed, and image data is neither uploaded nor saved in settings. Optional shortcut paths remain compatible with old settings and binaries and do not affect routing fingerprints.
+
+### Validation / 验证
+
+- 本机通过 92/92 Node 回归、9 组扫描器测试、8 组原生图标测试及 TypeScript / Vite 构建。原生测试覆盖透明图标、自定义资源、环境变量、正负索引、损坏和缺失回退、桌面优先、路径边界、批次数限及 100 次读取的 USER/GDI 句柄释放。
+- 浏览器 Tauri 模拟接口使用本机真实 PNG 通过 6 组图标界面场景，包括显示、语言/主题缓存、扫描刷新、提取与解码失败、旧结果隔离及可见区域加载。Rust 缓存测试和 Windows 打包由本次提交的 GitHub Actions 执行；本机更新使用同一成功构建。
+- Local checks passed: 92/92 Node regressions, nine scanner groups, eight native icon groups and TypeScript / Vite build. Native tests cover alpha, custom resources, environment variables, signed indices, fallback, desktop precedence, path boundaries, batch limits and USER/GDI ownership after 100 extractions.
+- Six browser groups passed with mocked Tauri commands and a real locally extracted PNG, covering display, language/theme reuse, rescan, extraction/decode failures, stale results and viewport loading. GitHub Actions executes Rust cache tests and Windows packaging for this commit; local replacement uses that exact successful build.
+
+### Rollback / 回滚
+
+Previous working commit / 上一可用提交: [a069863f005138ba555b4c3f1fa3864eb31376e2](https://github.com/frank-zhi-0804/clash-app-bypass/commit/a069863f005138ba555b4c3f1fa3864eb31376e2), version 0.1.9. Revert this isolated icon feature commit; preserve history, settings and release tags. / 使用 git revert 撤销本次独立图标功能提交，保留历史、设置和发布标签。
+
 ## 0.1.9 — 2026-10-14
 
 - 新增窗口顶部与设置页的「中文 / English」切换；语言保存在本机，重开恢复，旧设置默认中文。导航、应用与网站页面、帮助、确认框、提示、无障碍名称及窗口标题同步切换。

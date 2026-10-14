@@ -2,6 +2,7 @@ import { uiMessage, normalizeLanguage } from './messages';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { AppEntry, Integration, Settings, OperationResult, NormalizedWebsite } from './types';
 import type { RoutingSnapshot } from './routingDiagnostics';
+import type { AppIconRequest } from './appIcons';
 export const desktop = isTauri();
 const defaults: Settings = { selected: [], websites: [], language: 'zh-CN', configDir: '', dark: false, otherTraffic: 'proxy', proxyGroup: 'GLOBAL' };
 const examples: AppEntry[] = [
@@ -39,4 +40,9 @@ export async function applyRules(apps: AppEntry[], configDir: string, otherTraff
 }
 export async function removeRules(configDir: string): Promise<OperationResult> {
   return desktop ? invoke('remove_rules', { configDir }) : { message: uiMessage('demo.undo'), ruleCount: 0 };
+}
+
+export type { AppIconRequest } from './appIcons';
+export async function getAppIcons(requests: AppIconRequest[], refresh = false): Promise<Record<string, string | null>> {
+  return desktop ? invoke('get_app_icons', { requests, refresh }) : {};
 }

@@ -4,6 +4,7 @@ mod rules;
 mod live;
 mod websites;
 mod messages;
+mod icons;
 use messages::UiMessage;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use fs2::FileExt;
@@ -16,7 +17,7 @@ struct OperationLock(Arc<Mutex<()>>);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AppEntry { id: String, name: String, path: String, running: bool, processes: Vec<String>, #[serde(default)] suggested_processes: Vec<String>, #[serde(default)] source: String, #[serde(default)] warnings: Vec<String>, #[serde(default, skip_serializing_if = "Option::is_none")] source_message: Option<UiMessage>, #[serde(default, skip_serializing_if = "Option::is_none")] warning_messages: Option<Vec<UiMessage>>, #[serde(default)] path_missing: bool }
+struct AppEntry { id: String, name: String, path: String, running: bool, processes: Vec<String>, #[serde(default)] suggested_processes: Vec<String>, #[serde(default)] source: String, #[serde(default)] warnings: Vec<String>, #[serde(default, skip_serializing_if = "Option::is_none")] source_message: Option<UiMessage>, #[serde(default, skip_serializing_if = "Option::is_none")] warning_messages: Option<Vec<UiMessage>>, #[serde(default, skip_serializing_if = "Option::is_none")] icon_shortcut: Option<String>, #[serde(default)] path_missing: bool }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AppliedState { #[serde(default)] revision: u32, fingerprint: String, pending_restart: bool, has_rules: bool }
@@ -165,6 +166,7 @@ fn reconcile_entry(previous: &AppEntry, mut live: AppEntry) -> AppEntry {
     live.processes = paths.into_values().collect();
     live.suggested_processes.retain(|path| !live.processes.iter().any(|p| p.eq_ignore_ascii_case(path)));
     live.name = previous.name.clone();
+    if live.icon_shortcut.is_none() { live.icon_shortcut = previous.icon_shortcut.clone(); }
     live.path_missing = false;
     if removed > 0 { add_warning(&mut live, UiMessage::new("scanner.helpersRemoved").with("count", removed as u64)); }
     live
@@ -414,7 +416,8 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| { if let Some(w) = app.get_webview_window("main") { let _ = w.set_focus(); } }))
         .plugin(tauri_plugin_dialog::init())
         .manage(OperationLock(Arc::new(Mutex::new(()))))
-        .invoke_handler(tauri::generate_handler![load_settings, save_settings, normalize_website, scan_apps, inspect_app, refresh_selected, inspect_integration, apply_rules, remove_rules, diagnose_routing])
+        .manage(icons::IconCache::default())
+        .invoke_handler(tauri::generate_handler![icons::get_app_icons, load_settings, save_settings, normalize_website, scan_apps, inspect_app, refresh_selected, inspect_integration, apply_rules, remove_rules, diagnose_routing])
         .run(tauri::generate_context!()).expect("Unable to start Clash App Bypass");
 }
 
@@ -444,13 +447,14 @@ mod tests {
         for path in [&main, &helper, &fresh] { fs::write(path, b"fixture").unwrap(); }
         let old = AppEntry { id: "app".into(), name: "Friendly name".into(), path: main.to_string_lossy().into(), running: false,
             processes: vec![main.to_string_lossy().into(), helper.to_string_lossy().into(), dir.join("removed.exe").to_string_lossy().into()],
-            suggested_processes: vec![], source: "test".into(), warnings: vec![], source_message: None, warning_messages: Some(vec![]), path_missing: false };
-        let live = AppEntry { processes: vec![main.to_string_lossy().into(), fresh.to_string_lossy().into()], name: "Filename".into(), ..old.clone() };
+            suggested_processes: vec![], source: "test".into(), warnings: vec![], source_message: None, warning_messages: Some(vec![]), icon_shortcut: Some("desktop.lnk".into()), path_missing: false };
+        let live = AppEntry { processes: vec![main.to_string_lossy().into(), fresh.to_string_lossy().into()], name: "Filename".into(), icon_shortcut: None, ..old.clone() };
         let updated = reconcile_entry(&old, live);
         assert_eq!(updated.processes.len(), 3);
         assert!(updated.processes.contains(&helper.to_string_lossy().into_owned()));
         assert!(updated.processes.contains(&fresh.to_string_lossy().into_owned()));
         assert_eq!(updated.name, "Friendly name");
+        assert_eq!(updated.icon_shortcut.as_deref(), Some("desktop.lnk"));
         assert!(updated.warning_messages.as_ref().unwrap().iter().any(|warning| warning.key == "backend:scanner.helpersRemoved" && warning.values["count"] == 1));
         fs::remove_file(&main).unwrap();
         let missing = refresh_entries(vec![updated]).unwrap();
@@ -495,9 +499,9 @@ mod tests {
     fn metadata_sidecars_are_readable_by_old_settings_shape() {
         let old_json = serde_json::json!({"id":"user", "name":"User supplied name", "path":r"C:\User\app.exe", "running":false, "processes":[r"C:\User\app.exe"], "source":"user label", "warnings":["user warning"]});
         let old: AppEntry = serde_json::from_value(old_json.clone()).unwrap();
-        assert!(old.source_message.is_none()); assert!(old.warning_messages.is_none());
+        assert!(old.source_message.is_none()); assert!(old.warning_messages.is_none()); assert!(old.icon_shortcut.is_none());
         assert_eq!(serde_json::to_value(&old).unwrap()["warnings"], old_json["warnings"]);
-        let entry = materialize_legacy_metadata(AppEntry { source_message: Some(UiMessage::new("scanner.source.manual")), warning_messages: Some(vec![UiMessage::new("scanner.associationHelp")]), ..old });
+        let entry = materialize_legacy_metadata(AppEntry { icon_shortcut: Some(r"C:\Users\User\Desktop\app.lnk".into()), source_message: Some(UiMessage::new("scanner.source.manual")), warning_messages: Some(vec![UiMessage::new("scanner.associationHelp")]), ..old });
         let value = serde_json::to_value(&entry).unwrap();
         #[derive(Deserialize)] struct LegacyEntry { source: String, warnings: Vec<String>, name: String, path: String, processes: Vec<String> }
         let legacy: LegacyEntry = serde_json::from_value(value).unwrap();

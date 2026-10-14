@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $entries = @{}
+$iconPriorities = @{}
 $inventory = @(Get-CimInstance Win32_Process)
 $processes = @($inventory | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.EndsWith('.exe', [StringComparison]::OrdinalIgnoreCase) })
 $processById = @{}
@@ -55,15 +56,23 @@ function Get-ValorantPaths([string]$path) {
   }
 }
 function New-UiMessage([string]$key) { return [ordered]@{ key = 'backend:' + $key } }
-function Add-App([string]$path, [string]$name, [string]$source) {
+function Add-App([string]$path, [string]$name, [string]$source, [string]$shortcutPath = '', [int]$iconPriority = 0) {
   if (-not $path -or -not $path.EndsWith('.exe', [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { return }
   try { $full = [IO.Path]::GetFullPath($path) } catch { return }
   if ($full.StartsWith($windowsRoot, [StringComparison]::OrdinalIgnoreCase)) { return }
   $id = $full.ToLowerInvariant()
-  if ($entries.ContainsKey($id)) { return }
+  $iconShortcut = $null
+  if ($shortcutPath -and $shortcutPath.EndsWith('.lnk', [StringComparison]::OrdinalIgnoreCase)) {
+    try { $candidate = [IO.Path]::GetFullPath($shortcutPath); if ($candidate -match '^[A-Za-z]:\\' -and (Test-Path -LiteralPath $candidate -PathType Leaf) -and -not (Test-LinkedPath $candidate)) { $iconShortcut = $candidate } } catch {}
+  }
+  if ($entries.ContainsKey($id)) {
+    if ($iconShortcut -and $iconPriority -gt [int]$iconPriorities[$id]) { $entries[$id].iconShortcut = $iconShortcut; $iconPriorities[$id] = $iconPriority }
+    return
+  }
+  $iconPriorities[$id] = if ($iconShortcut) { $iconPriority } else { 0 }
   if (-not $name) { $name = Get-Product $full }
   if (-not $name) { $name = [IO.Path]::GetFileNameWithoutExtension($full) }
-  $entries[$id] = [ordered]@{ id = $id; name = $name; path = $full; running = $false; processes = @($full); suggestedProcesses = @(); source = ''; warnings = @(); sourceMessage = (New-UiMessage $source); warningMessages = @() }
+  $entries[$id] = [ordered]@{ id = $id; name = $name; path = $full; running = $false; processes = @($full); suggestedProcesses = @(); source = ''; warnings = @(); iconShortcut = $iconShortcut; sourceMessage = (New-UiMessage $source); warningMessages = @() }
 }
 $isInspection = [bool]($env:VERGE_DIRECT_INSPECT_BATCH -or $env:VERGE_DIRECT_INSPECT)
 if ($env:VERGE_DIRECT_INSPECT_BATCH) {
@@ -81,8 +90,9 @@ if ($env:VERGE_DIRECT_INSPECT_BATCH) {
   $shell = New-Object -ComObject WScript.Shell
   $roots = @([Environment]::GetFolderPath('StartMenu'), [Environment]::GetFolderPath('CommonStartMenu'), [Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('CommonDesktopDirectory')) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique
   foreach ($root in $roots) {
-    foreach ($link in @(Get-ChildItem -LiteralPath $root -Filter '*.lnk' -Recurse -File -ErrorAction SilentlyContinue)) {
-      try { $shortcut = $shell.CreateShortcut($link.FullName); Add-App $shortcut.TargetPath $link.BaseName 'scanner.source.shortcut' } catch {}
+    $iconPriority = if ($root -ieq [Environment]::GetFolderPath('Desktop')) { 3 } elseif ($root -ieq [Environment]::GetFolderPath('CommonDesktopDirectory')) { 2 } else { 1 }
+    foreach ($link in @(Get-ChildItem -LiteralPath $root -Filter '*.lnk' -Recurse -File -ErrorAction SilentlyContinue | Sort-Object FullName)) {
+      try { $shortcut = $shell.CreateShortcut($link.FullName); $iconHint = if ([string]::IsNullOrWhiteSpace($shortcut.Arguments)) { $link.FullName } else { '' }; Add-App $shortcut.TargetPath $link.BaseName 'scanner.source.shortcut' $iconHint $iconPriority } catch {}
     }
   }
   # Running executables without a shortcut remain available as process entries.

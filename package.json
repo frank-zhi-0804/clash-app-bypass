@@ -1,6 +1,6 @@
 {
   "name": "clash-app-bypass",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": true,
   "description": "A Windows application and website bypass assistant for Clash Verge Rev",
   "type": "module",

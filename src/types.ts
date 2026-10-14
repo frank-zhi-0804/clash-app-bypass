@@ -13,6 +13,7 @@ export interface AppEntry {
   sourceMessage?: UiMessage;
   warningMessages?: UiMessage[];
   pathMissing?: boolean;
+  iconShortcut?: string;
 }
 export interface AppliedState { revision?: number; fingerprint: string; pendingRestart: boolean; hasRules: boolean; }
 export interface Settings { selected: AppEntry[]; websites?: string[]; language?: Language; configDir: string; dark: boolean; otherTraffic: 'proxy' | 'subscription'; proxyGroup: string; applied?: AppliedState | null; }

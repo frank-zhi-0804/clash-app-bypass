@@ -4,9 +4,11 @@
 
 [中文](README.md) | **English**
 
-A Windows application and website bypass assistant for Clash Verge Rev. Select applications that should connect directly, or paste a website address to bypass its registrable domain and subdomains. This is an independent third-party project, unaffiliated with Clash Verge Rev. Current source version: **0.1.9**. The interface supports Chinese and English.
+A Windows application and website bypass assistant for Clash Verge Rev. Select applications that should connect directly, or paste a website address to bypass its registrable domain and subdomains. This is an independent third-party project, unaffiliated with Clash Verge Rev. Current source version: **0.1.10**. The interface supports Chinese and English.
 
 ## Features
+
+- Real local app icons: prefer desktop and Start Menu shortcuts, then executable icons. Icons load in visible batches with a separate cache and a text fallback.
 
 - Switch instantly between Chinese and English, with the preference saved locally. Existing settings retain Chinese.
 
@@ -150,3 +152,11 @@ Choose “中文” or “English” at the top of the window or in Settings. In
 Language is a display preference: it does not change bypass selections, routing fingerprints, or the automatic-application pause after undo. A failed preference save prompts a retry. Language selection is temporarily disabled during routing operations to prevent concurrent settings overwrites.
 
 Translations are bundled locally with i18next and do not use an online translation service. See the [localization maintenance guide](docs/localization.md) for resource and message conventions.
+
+## Application icons (0.1.10)
+
+The app list prefers desktop shortcuts for the same executable, followed by Start Menu shortcuts and the executable’s embedded icon. Local custom icon files and resource indices are read without launching shortcuts or applications. The personal desktop takes precedence over the public desktop. Executables at different paths do not share icons just because their names match. Parameterized website or game shortcuts do not contribute custom icons to a shared browser or launcher.
+
+Icons are extracted locally as transparent 64-pixel PNGs and loaded in batches for visible or nearby rows. A separate memory cache keeps image data out of `settings.json`. Scanning again refreshes the icon cache. Missing, unsupported, or unreadable icons retain the initial-letter fallback without affecting routing choices or rules.
+
+Only verifiable local files are read; network locations and unsafe directory links are skipped. Icons are not uploaded and no online icon service is used.

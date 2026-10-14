@@ -139,3 +139,7 @@ test('controlled native error detail is literal text under a localized technical
     assert.doesNotMatch(rendered, /backend:technical|\[object Object\]|{{detail}}/);
   } finally { await i18n.changeLanguage('zh-CN'); }
 });
+test('icon metadata changes preserve routing state', () => {
+  const withIcon = { ...settings, selected: settings.selected.map(app => ({ ...app, iconShortcut: "C:/Users/User/Desktop/Game.lnk" })) };
+  assert.equal(routingFingerprint(withIcon), routingFingerprint(settings));
+});

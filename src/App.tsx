@@ -4,7 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { version } from '../package.json';
 import type { DisplayMessage, Language as UiLanguage } from './types';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Avatar, Box, Button, Chip, CircularProgress, Collapse, CssBaseline, Dialog, DialogActions, DialogContent, DialogTitle, Divider, IconButton, InputAdornment, List, ListItemButton, ListItemIcon, ListItemText, MenuItem, Paper, Snackbar, Stack, Switch, Tab, Tabs, TextField, ThemeProvider, Tooltip, Typography } from '@mui/material';
+import { Alert, Box, Button, Chip, CircularProgress, Collapse, CssBaseline, Dialog, DialogActions, DialogContent, DialogTitle, Divider, IconButton, InputAdornment, List, ListItemButton, ListItemIcon, ListItemText, MenuItem, Paper, Snackbar, Stack, Switch, Tab, Tabs, TextField, ThemeProvider, Tooltip, Typography } from '@mui/material';
 import { Apps, Add, ChevronRight, DarkMode, FolderOpen, LightMode, Refresh, Search, Settings as SettingsIcon, Undo, ExpandMore, Language } from '@mui/icons-material';
 import { open } from '@tauri-apps/plugin-dialog';
 import * as api from './api';
@@ -15,6 +15,7 @@ import { applicationStatus, readWorkspace, resumeAfterRoutingChange, routingFing
 import { diagnoseApp } from './routingDiagnostics';
 import type { RoutingSnapshot } from './routingDiagnostics';
 import WebsitePanel from './WebsitePanel';
+import AppIcon, { resetAppIcons } from './AppIcon';
 import { websiteDomains } from './websites';
 
 export default function App() {
@@ -56,7 +57,7 @@ export default function App() {
     const byId = new Map(apps.map(a => [a.id, a]));
     settings.selected.forEach(a => {
       const live = byId.get(a.id);
-      byId.set(a.id, { ...a, running: live?.running ?? false });
+      byId.set(a.id, { ...a, running: live?.running ?? false, iconShortcut: live?.iconShortcut ?? a.iconShortcut });
     });
     return [...byId.values()].sort((a, b) => Number(selected.has(b.id)) - Number(selected.has(a.id)) || a.name.localeCompare(b.name, settings.language));
   }, [apps, settings.selected, selected, settings.language]);
@@ -170,8 +171,9 @@ export default function App() {
     return true;
   } catch (e) { failedAutomatic.current = routingFingerprint(next); pendingSettingsSave.current = true; setSettings({ ...next, language: preferredLanguage.current }); setWriteError(m('error.save', { error: messageFromError(e) })); return false; } finally { operation.current = false; setBusy(''); } }
   async function refresh() {
-    if (!ready) { await initialize(); return; }
     if (operation.current) return;
+    resetAppIcons();
+    if (!ready) { await initialize(); return; }
     operation.current = true; setDiagnostics(undefined);
     setBusy(m('busy.scanning')); setError('');
     try {
@@ -306,7 +308,7 @@ export default function App() {
         <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 1 }}><Tab label={t('apps.all')}/><Tab label={t('apps.running')}/><Tab label={t('apps.selected')}/></Tabs>
         <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
           {!filtered.length && <Box sx={{ p: 5, textAlign: 'center' }}><Typography color="text.secondary">{busy ? t('busy.loading') : t('apps.empty')}</Typography>{!busy && <Button disabled={blocked || !ready} onClick={add} sx={{ mt: 1 }}>{t('apps.addFile')}</Button>}</Box>}
-          {filtered.map((a, i) => <Box key={a.id}><Stack direction="row" spacing={2} alignItems="center" sx={{ p: 2 }}><Avatar variant="rounded" sx={{ bgcolor: selected.has(a.id) ? 'primary.main' : 'action.disabledBackground', color: selected.has(a.id) ? 'primary.contrastText' : 'text.secondary' }}>{a.name.slice(0, 1)}</Avatar><Box sx={{ flex: 1, minWidth: 0 }}><Typography fontWeight={600}>{a.name}</Typography><Typography variant="caption" color="text.secondary">{a.pathMissing ? t('apps.missing') : a.running ? t('apps.running') : t('apps.notRunning')} · {display(a.sourceMessage ?? a.source)}</Typography><Tooltip title={a.path}><Typography variant="caption" display="block" color="text.secondary" noWrap>{a.path}</Typography></Tooltip><Button size="small" sx={{ p: 0, mt: .5, fontSize: 12 }} endIcon={expanded.includes(a.id) ? <ExpandMore/> : <ChevronRight/>} aria-expanded={expanded.includes(a.id)} onClick={() => setExpanded(old => old.includes(a.id) ? old.filter(id => id !== a.id) : [...old, a.id])}>{t('apps.processCount', { count: a.processes.length })}</Button></Box><Stack alignItems="center"><Switch checked={selected.has(a.id)} disabled={blocked || !ready} slotProps={{ input: { 'aria-label': t('apps.bypassAria', { name: a.name }) } }} onChange={(_, checked) => persist({ ...settings, selected: checked ? [...settings.selected, a] : settings.selected.filter(b => b.id !== a.id) })}/><Typography variant="caption" color="text.secondary">{selected.has(a.id) ? t('apps.direct') : settings.otherTraffic === 'proxy' ? t('apps.proxied') : t('apps.subscription')}</Typography></Stack></Stack><Collapse in={expanded.includes(a.id)}><Box sx={{ px: 3, pb: 2 }}>{(a.warningMessages ?? a.warnings).map((w, index) => <Alert key={index} severity="warning" sx={{ mb: 1 }}>{display(w)}</Alert>)}{(a.suggestedProcesses || []).filter(p => !a.processes.some(known => known.toLowerCase() === p.toLowerCase())).map(p => <Paper key={p} variant="outlined" sx={{ p: 1.5, mb: 1 }}><Typography variant="body2">{t('apps.candidate')}</Typography><Typography sx={{ fontSize: 12, overflowWrap: "anywhere" }}>{p}</Typography><Button size="small" disabled={blocked || !selected.has(a.id)} onClick={() => includeCandidate(a, p)}>{t('apps.confirmCandidate')}</Button><Typography variant="caption" display="block">{t('apps.candidateHelp')}</Typography></Paper>)}<Typography variant="caption" color="text.secondary">{t('apps.pathHelp')}</Typography>{a.processes.map(p => <Typography key={p} sx={{ fontFamily: 'monospace', fontSize: 12, overflowWrap: 'anywhere', mt: .5 }}>{p}</Typography>)}</Box></Collapse>{i < filtered.length - 1 && <Divider/>}</Box>)}
+          {filtered.map((a, i) => <Box key={a.id}><Stack direction="row" spacing={2} alignItems="center" sx={{ p: 2 }}><AppIcon app={a} selected={selected.has(a.id)}/><Box sx={{ flex: 1, minWidth: 0 }}><Typography fontWeight={600}>{a.name}</Typography><Typography variant="caption" color="text.secondary">{a.pathMissing ? t('apps.missing') : a.running ? t('apps.running') : t('apps.notRunning')} · {display(a.sourceMessage ?? a.source)}</Typography><Tooltip title={a.path}><Typography variant="caption" display="block" color="text.secondary" noWrap>{a.path}</Typography></Tooltip><Button size="small" sx={{ p: 0, mt: .5, fontSize: 12 }} endIcon={expanded.includes(a.id) ? <ExpandMore/> : <ChevronRight/>} aria-expanded={expanded.includes(a.id)} onClick={() => setExpanded(old => old.includes(a.id) ? old.filter(id => id !== a.id) : [...old, a.id])}>{t('apps.processCount', { count: a.processes.length })}</Button></Box><Stack alignItems="center"><Switch checked={selected.has(a.id)} disabled={blocked || !ready} slotProps={{ input: { 'aria-label': t('apps.bypassAria', { name: a.name }) } }} onChange={(_, checked) => persist({ ...settings, selected: checked ? [...settings.selected, a] : settings.selected.filter(b => b.id !== a.id) })}/><Typography variant="caption" color="text.secondary">{selected.has(a.id) ? t('apps.direct') : settings.otherTraffic === 'proxy' ? t('apps.proxied') : t('apps.subscription')}</Typography></Stack></Stack><Collapse in={expanded.includes(a.id)}><Box sx={{ px: 3, pb: 2 }}>{(a.warningMessages ?? a.warnings).map((w, index) => <Alert key={index} severity="warning" sx={{ mb: 1 }}>{display(w)}</Alert>)}{(a.suggestedProcesses || []).filter(p => !a.processes.some(known => known.toLowerCase() === p.toLowerCase())).map(p => <Paper key={p} variant="outlined" sx={{ p: 1.5, mb: 1 }}><Typography variant="body2">{t('apps.candidate')}</Typography><Typography sx={{ fontSize: 12, overflowWrap: "anywhere" }}>{p}</Typography><Button size="small" disabled={blocked || !selected.has(a.id)} onClick={() => includeCandidate(a, p)}>{t('apps.confirmCandidate')}</Button><Typography variant="caption" display="block">{t('apps.candidateHelp')}</Typography></Paper>)}<Typography variant="caption" color="text.secondary">{t('apps.pathHelp')}</Typography>{a.processes.map(p => <Typography key={p} sx={{ fontFamily: 'monospace', fontSize: 12, overflowWrap: 'anywhere', mt: .5 }}>{p}</Typography>)}</Box></Collapse>{i < filtered.length - 1 && <Divider/>}</Box>)}
         </Paper>
         {routingActions}
       </> : page === 'websites' ? <>
