@@ -1,6 +1,6 @@
 # Changelog / 更新记录
 
-## 0.1.10 — 2026-10-14
+## 0.1.10 — 2026-10-15
 
 - 软件列表优先显示桌面快捷方式的真实图标，其次是开始菜单和 EXE 内置图标。支持自定义本地 ICO、环境变量和正负资源索引；带参数的网页或游戏入口不会把专用图标套到共用程序上。
 - 可见及邻近条目批量读取 64×64 透明 PNG，独立内存缓存包含失败结果。重新扫描刷新缓存，旧请求不会覆盖新结果；读取失败保留首字兜底。仅访问可验证的本地文件，不执行快捷方式，不上传图标，不把图像数据写入设置。可选快捷方式路径兼容旧设置与旧版回滚，不参与分流指纹。
@@ -10,8 +10,15 @@
 - Windows 构建补正：异步 Tauri 命令按框架要求返回 Result；读取失败仍返回空图标，不影响选择和直连。
 - Windows build compatibility: the asynchronous Tauri command returns Result as required by the framework; extraction failures still resolve to empty icons.
 
+- 本机窗口验收发现扫描脚本超过 Windows 命令行长度限制，改为短启动命令和带长度的 UTF-8 标准输入传输；保留原始业务输入、现有退出码、隐藏窗口和超时保护，避免长脚本影响扫描与自动检查。
+- Native verification found the scanner exceeded the Windows command-line limit. A short bootstrap now reads framed UTF-8 script bytes from stdin, preserving original business input, exit codes, hidden workers and timeout handling.
+
 ### Validation / 验证
 
+- 新增 Windows 脚本传输回归 4 组：超过 100 KiB 的脚本和业务数据、中文与表情、内部编码重设、原始 JSON、截断输入及退出码均通过；CI 另调用真实 Rust 辅助入口测试大输入、提前输出和错误优先级。
+- 本机通过短启动入口完成真实软件扫描、5 个已选图标提取及只读 Clash 诊断，保留规则模式与 54 条已加载程序规则。
+- Native scanning, extraction for five selected apps and read-only Clash diagnosis passed through the short bootstrap, retaining rule mode and 54 loaded application rules.
+- Four Windows transport groups passed for scripts and input over 100 KiB, Unicode, internal encoding resets, raw JSON, truncated frames and exit status. CI additionally exercises the actual Rust helper with large input, early output and error-priority cases.
 - 本机通过 92/92 Node 回归、9 组扫描器测试、8 组原生图标测试及 TypeScript / Vite 构建。原生测试覆盖透明图标、自定义资源、环境变量、正负索引、损坏和缺失回退、桌面优先、路径边界、批次数限及 100 次读取的 USER/GDI 句柄释放。
 - 浏览器 Tauri 模拟接口使用本机真实 PNG 通过 6 组图标界面场景，包括显示、语言/主题缓存、扫描刷新、提取与解码失败、旧结果隔离及可见区域加载。Rust 缓存测试和 Windows 打包由本次提交的 GitHub Actions 执行；本机更新使用同一成功构建。
 - Local checks passed: 92/92 Node regressions, nine scanner groups, eight native icon groups and TypeScript / Vite build. Native tests cover alpha, custom resources, environment variables, signed indices, fallback, desktop precedence, path boundaries, batch limits and USER/GDI ownership after 100 extractions.
@@ -19,7 +26,7 @@
 
 ### Rollback / 回滚
 
-Previous working commit / 上一可用提交: [a069863f005138ba555b4c3f1fa3864eb31376e2](https://github.com/frank-zhi-0804/clash-app-bypass/commit/a069863f005138ba555b4c3f1fa3864eb31376e2), version 0.1.9. Revert this isolated icon feature commit; preserve history, settings and release tags. / 使用 git revert 撤销本次独立图标功能提交，保留历史、设置和发布标签。
+Previous working commit / 上一可用提交: [a069863f005138ba555b4c3f1fa3864eb31376e2](https://github.com/frank-zhi-0804/clash-app-bypass/commit/a069863f005138ba555b4c3f1fa3864eb31376e2), version 0.1.9. Revert the icon feature and its build/transport fixes together; preserve history, settings and release tags. / 使用 git revert 一并撤销图标功能及构建、传输修正，保留历史、设置和发布标签。
 
 ## 0.1.9 — 2026-10-14
 

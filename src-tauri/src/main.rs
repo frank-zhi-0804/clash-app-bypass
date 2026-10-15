@@ -114,11 +114,15 @@ fn powershell_input(script: &str, inspect: Option<&str>, input: Option<&str>) ->
     #[cfg(not(windows))] { let _ = (script, inspect, input); return Err(UiMessage::new("platform.windowsOnly")); }
     #[cfg(windows)] {
         use std::os::windows::process::CommandExt;
-        let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let bytes: Vec<u8> = include_str!("../scripts/runner.ps1").encode_utf16().flat_map(u16::to_le_bytes).collect();
+        if script.is_empty() || script.len() > 4 * 1024 * 1024 { return Err(UiMessage::new("script.input")); }
+        let mut payload = (script.len() as u32).to_le_bytes().to_vec();
+        payload.extend_from_slice(script.as_bytes());
+        payload.extend_from_slice(input.unwrap_or("").as_bytes());
         let shell = PathBuf::from(std::env::var("WINDIR").map_err(|_| UiMessage::new("platform.windowsDirectory"))?).join("System32/WindowsPowerShell/v1.0/powershell.exe");
         let mut command = Command::new(shell);
         command.args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &STANDARD.encode(bytes)])
-            .creation_flags(0x08000000).stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
+            .creation_flags(0x08000000).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         command.env_remove("VERGE_DIRECT_INSPECT");
         command.env_remove("VERGE_DIRECT_INSPECT_BATCH");
         if let Some(path) = inspect {
@@ -126,14 +130,13 @@ fn powershell_input(script: &str, inspect: Option<&str>, input: Option<&str>) ->
             else { command.env("VERGE_DIRECT_INSPECT", path); }
         }
         let mut child = command.spawn().map_err(|e| UiMessage::detail("script.start", e))?;
-        if let Some(input) = input {
-            child.stdin.take().ok_or(UiMessage::new("script.input"))?.write_all(input.as_bytes()).map_err(|_| UiMessage::new("script.input"))?;
-        }
         // Drain pipes concurrently to avoid a full stdout pipe deadlocking large scans.
         let stdout = child.stdout.take().ok_or(UiMessage::new("script.stdout"))?;
         let stderr = child.stderr.take().ok_or(UiMessage::new("script.stderr"))?;
         let out = std::thread::spawn(move || { use std::io::Read; let mut bytes = Vec::new(); let mut stream = stdout; stream.read_to_end(&mut bytes).map(|_| bytes) });
         let err = std::thread::spawn(move || { use std::io::Read; let mut bytes = Vec::new(); let mut stream = stderr; stream.read_to_end(&mut bytes).map(|_| bytes) });
+        let stdin = child.stdin.take().ok_or(UiMessage::new("script.input"))?;
+        let writer = std::thread::spawn(move || { let mut stream = stdin; stream.write_all(&payload) });
         let started = Instant::now();
         let status = loop {
             match child.try_wait().map_err(UiMessage::technical)? { Some(s) => break s, None => {
@@ -143,7 +146,9 @@ fn powershell_input(script: &str, inspect: Option<&str>, input: Option<&str>) ->
         };
         let output = out.join().map_err(|_| UiMessage::new("script.thread"))?.map_err(UiMessage::technical)?;
         let errors = err.join().map_err(|_| UiMessage::new("script.thread"))?.map_err(UiMessage::technical)?;
+        let written = writer.join().map_err(|_| UiMessage::new("script.thread"))?;
         if !status.success() { return Err(script_failure(&output, &errors)); }
+        written.map_err(|_| UiMessage::new("script.input"))?;
         Ok(String::from_utf8_lossy(&output).trim_start_matches('\u{feff}').trim().into())
     }
 }
@@ -424,6 +429,30 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(windows)]
+    fn windows_runner_preserves_long_unicode_source_and_input() {
+        let script = format!("{}\n[Console]::InputEncoding=[Text.Encoding]::UTF8;[Console]::Out.Write([Console]::In.ReadToEnd())", "# 中文传输🚀\r\n".repeat(8000));
+        let input = "中文🚀 literal ${env:PATH} ".repeat(16000) + "END";
+        assert_eq!(powershell_input(&script, None, Some(&input)).unwrap(), input);
+    }
+    #[test]
+    #[cfg(windows)]
+    fn windows_runner_drains_early_output_before_large_input() {
+        let script = "[Console]::Out.Write(('x'*131072));[Console]::Out.Write([Console]::In.ReadToEnd().Length)";
+        let input = "d".repeat(262144);
+        let output = powershell_input(script, None, Some(&input)).unwrap();
+        assert_eq!(output, format!("{}262144", "x".repeat(131072)));
+    }
+    #[test]
+    #[cfg(windows)]
+    fn windows_runner_keeps_inspection_environment_and_script_errors() {
+        let inspect = r#"["D:\\软件\\app.exe"]"#;
+        assert_eq!(powershell("[Console]::Out.Write($env:VERGE_DIRECT_INSPECT_BATCH)", Some(inspect)).unwrap(), inspect);
+        let error = powershell_input("[Console]::Out.Write('SCAN_BATCH_LIMIT');exit 7", None, Some(&"data".repeat(8192))).unwrap_err();
+        assert_eq!(error.key, "backend:scanner.batchLimit");
+    }
+
     #[test]
     fn displayed_config_paths_preserve_absolute_windows_roots() {
         for (source, expected) in [

@@ -25,6 +25,9 @@ jobs:
       - name: Test Windows application association
         shell: powershell
         run: .\tests\scanner.test.ps1
+      - name: Test Windows helper transport
+        shell: powershell
+        run: .\tests\runner.test.ps1
       - name: Test local Windows icons
         shell: powershell
         run: .\tests\app-icons.test.ps1
