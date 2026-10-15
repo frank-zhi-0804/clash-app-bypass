@@ -19,7 +19,12 @@ function Invoke-R([string]$Code,[string]$Data,[byte[]]$RawFrame=$null,[int]$Time
  $si.EnvironmentVariables['CLASH_RUNNER_TEST']='environment-kept'
  $p=[Diagnostics.Process]::new();$p.StartInfo=$si
  try{
-  [void]$p.Start();$out=$p.StandardOutput.ReadToEndAsync();$err=$p.StandardError.ReadToEndAsync();$stdin=$p.StandardInput.BaseStream
+  # .NET Framework initializes redirected stdin from Console.InputEncoding.
+  # A BOM-bearing encoding can write its preamble before our binary frame.
+  $parentInputEncoding=[Console]::InputEncoding
+  try{[Console]::InputEncoding=$utf8;[void]$p.Start()}
+  finally{[Console]::InputEncoding=$parentInputEncoding}
+  $out=$p.StandardOutput.ReadToEndAsync();$err=$p.StandardError.ReadToEndAsync();$stdin=$p.StandardInput.BaseStream
   try{
    if($null -ne $RawFrame){$stdin.Write($RawFrame,0,$RawFrame.Length)}else{
     $stdin.Write($header,0,4)

@@ -19,6 +19,8 @@
 - 本机通过短启动入口完成真实软件扫描、5 个已选图标提取及只读 Clash 诊断，保留规则模式与 54 条已加载程序规则。
 - Native scanning, extraction for five selected apps and read-only Clash diagnosis passed through the short bootstrap, retaining rule mode and 54 loaded application rules.
 - Four Windows transport groups passed for scripts and input over 100 KiB, Unicode, internal encoding resets, raw JSON, truncated frames and exit status. CI additionally exercises the actual Rust helper with large input, early output and error-priority cases.
+- 测试启动器兼容 Windows PowerShell 5.1 父进程的带 BOM UTF-8 编码，并在启动后恢复父编码；普通编码与带 BOM 环境均通过相同回归。
+- The test launcher handles BOM-bearing UTF-8 in a Windows PowerShell 5.1 parent and restores the parent encoding after startup. The same regressions pass under both parent encodings.
 - 本机通过 92/92 Node 回归、9 组扫描器测试、8 组原生图标测试及 TypeScript / Vite 构建。原生测试覆盖透明图标、自定义资源、环境变量、正负索引、损坏和缺失回退、桌面优先、路径边界、批次数限及 100 次读取的 USER/GDI 句柄释放。
 - 浏览器 Tauri 模拟接口使用本机真实 PNG 通过 6 组图标界面场景，包括显示、语言/主题缓存、扫描刷新、提取与解码失败、旧结果隔离及可见区域加载。Rust 缓存测试和 Windows 打包由本次提交的 GitHub Actions 执行；本机更新使用同一成功构建。
 - Local checks passed: 92/92 Node regressions, nine scanner groups, eight native icon groups and TypeScript / Vite build. Native tests cover alpha, custom resources, environment variables, signed indices, fallback, desktop precedence, path boundaries, batch limits and USER/GDI ownership after 100 extractions.
