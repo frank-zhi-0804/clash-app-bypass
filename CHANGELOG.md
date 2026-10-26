@@ -4,6 +4,8 @@
 
 - 修复批量扫描输入会接受 `null` 和嵌套数组的问题；无效批量路径现在会稳定拒绝，并兼容 Windows PowerShell 5.1 与 PowerShell 7 的空数组行为，保留单项与批量扫描的原有行为。
 - Fixed batch scanner validation accepting `null` and nested arrays; invalid path batches are now rejected consistently across Windows PowerShell 5.1 and PowerShell 7, including their different empty-array behavior, while single-item and valid batch scans retain their behavior.
+- 提交 Rust 依赖锁文件，并让 Windows Actions 的测试与桌面打包使用锁定依赖，避免构建依赖随时间漂移。
+- Added the Rust dependency lockfile and made Windows Actions use locked dependencies for tests and desktop packaging, preventing time-dependent dependency resolution.
 
 ## 0.1.10 — 2026-10-15
 

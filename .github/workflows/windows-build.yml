@@ -36,7 +36,7 @@ jobs:
       - name: Test Rust backend
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - name: Package desktop app
-        run: npm run desktop:build -- --locked
+        run: npm run desktop:build -- -- --locked
       - name: Upload Windows installer and portable executable
         uses: actions/upload-artifact@v5
         with:
