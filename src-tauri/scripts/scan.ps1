@@ -78,10 +78,11 @@ $isInspection = [bool]($env:VERGE_DIRECT_INSPECT_BATCH -or $env:VERGE_DIRECT_INS
 if ($env:VERGE_DIRECT_INSPECT_BATCH) {
   $batch = $env:VERGE_DIRECT_INSPECT_BATCH.Trim()
   if (-not $batch.StartsWith('[') -or -not $batch.EndsWith(']')) { Write-Output 'SCAN_BATCH_JSON'; throw 'SCAN_BATCH_JSON' }
-  $paths = ConvertFrom-Json -InputObject $batch
+  $paths = @(ConvertFrom-Json -InputObject $batch)
   if ($paths.Count -gt 128) { Write-Output 'SCAN_BATCH_LIMIT'; throw 'SCAN_BATCH_LIMIT' }
-  foreach ($path in $paths) {
-    if ($path -isnot [string]) { Write-Output 'SCAN_BATCH_STRING'; throw 'SCAN_BATCH_STRING' }
+  for ($index = 0; $index -lt $paths.Count; $index++) {
+    $path = $paths[$index]
+    if ($null -eq $path -or $path -isnot [string]) { Write-Output 'SCAN_BATCH_STRING'; throw 'SCAN_BATCH_STRING' }
     Add-App $path '' 'scanner.source.manual'
   }
 } elseif ($env:VERGE_DIRECT_INSPECT) {

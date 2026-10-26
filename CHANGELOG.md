@@ -1,5 +1,10 @@
 # Changelog / 更新记录
 
+## Unreleased — 2026-10-26
+
+- 修复批量扫描输入会接受 `null` 和嵌套数组的问题；无效批量路径现在会稳定拒绝，并保留单项与批量扫描的原有行为。
+- Fixed batch scanner validation accepting `null` and nested arrays; invalid path batches are now rejected consistently while single-item and valid batch scans retain their behavior.
+
 ## 0.1.10 — 2026-10-15
 
 - 软件列表优先显示桌面快捷方式的真实图标，其次是开始菜单和 EXE 内置图标。支持自定义本地 ICO、环境变量和正负资源索引；带参数的网页或游戏入口不会把专用图标套到共用程序上。
