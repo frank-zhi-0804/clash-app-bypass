@@ -78,7 +78,12 @@ $isInspection = [bool]($env:VERGE_DIRECT_INSPECT_BATCH -or $env:VERGE_DIRECT_INS
 if ($env:VERGE_DIRECT_INSPECT_BATCH) {
   $batch = $env:VERGE_DIRECT_INSPECT_BATCH.Trim()
   if (-not $batch.StartsWith('[') -or -not $batch.EndsWith(']')) { Write-Output 'SCAN_BATCH_JSON'; throw 'SCAN_BATCH_JSON' }
-  $paths = @(ConvertFrom-Json -InputObject $batch)
+  $paths = ConvertFrom-Json -InputObject $batch
+  if ($null -eq $paths) {
+    if ($batch -match '^\[\s*\]$') { $paths = @() }
+    else { Write-Output 'SCAN_BATCH_STRING'; throw 'SCAN_BATCH_STRING' }
+  }
+  if ($paths.Count -eq 0 -and $batch -notmatch '^\[\s*\]$') { Write-Output 'SCAN_BATCH_STRING'; throw 'SCAN_BATCH_STRING' }
   if ($paths.Count -gt 128) { Write-Output 'SCAN_BATCH_LIMIT'; throw 'SCAN_BATCH_LIMIT' }
   for ($index = 0; $index -lt $paths.Count; $index++) {
     $path = $paths[$index]

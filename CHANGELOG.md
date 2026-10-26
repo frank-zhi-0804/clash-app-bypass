@@ -2,8 +2,8 @@
 
 ## Unreleased — 2026-10-26
 
-- 修复批量扫描输入会接受 `null` 和嵌套数组的问题；无效批量路径现在会稳定拒绝，并保留单项与批量扫描的原有行为。
-- Fixed batch scanner validation accepting `null` and nested arrays; invalid path batches are now rejected consistently while single-item and valid batch scans retain their behavior.
+- 修复批量扫描输入会接受 `null` 和嵌套数组的问题；无效批量路径现在会稳定拒绝，并兼容 Windows PowerShell 5.1 与 PowerShell 7 的空数组行为，保留单项与批量扫描的原有行为。
+- Fixed batch scanner validation accepting `null` and nested arrays; invalid path batches are now rejected consistently across Windows PowerShell 5.1 and PowerShell 7, including their different empty-array behavior, while single-item and valid batch scans retain their behavior.
 
 ## 0.1.10 — 2026-10-15
 
